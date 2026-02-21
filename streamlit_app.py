@@ -460,7 +460,7 @@ def configure_sidebar() -> tuple[GAConfig, bool, bool]:
     st.sidebar.divider()
     st.sidebar.header("Genetik Algoritma Parametreleri")
     population_size = st.sidebar.slider("Populasyon", 40, 500, 180, step=10)
-    generations_slider = st.sidebar.slider("Nesil sayisi (slider)", 50, 5000, 1500, step=25)
+    generations_slider = st.sidebar.slider("Nesil sayisi (slider)", 50, 5000, 4000, step=25)
     generations_manual = st.sidebar.number_input(
         "Nesil sayisi (manuel)",
         min_value=50,
