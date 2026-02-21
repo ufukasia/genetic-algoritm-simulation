@@ -454,7 +454,10 @@ def build_live_info_text(
     return "\n".join(lines)
 
 
-def configure_sidebar() -> GAConfig:
+def configure_sidebar() -> tuple[GAConfig, bool, bool]:
+    run_button = st.sidebar.button("Calistir", type="primary", use_container_width=True)
+    clear_button = st.sidebar.button("Oturumu sifirla", use_container_width=True)
+    st.sidebar.divider()
     st.sidebar.header("Genetik Algoritma Parametreleri")
     population_size = st.sidebar.slider("Populasyon", 40, 500, 180, step=10)
     generations_slider = st.sidebar.slider("Nesil sayisi (slider)", 50, 5000, 1500, step=25)
@@ -481,21 +484,25 @@ def configure_sidebar() -> GAConfig:
     frame_delay = st.sidebar.slider("Kare gecikmesi (sn)", 0.0, 0.30, 0.05, step=0.01)
     random_seed = st.sidebar.number_input("Rastgele tohum", min_value=0, max_value=999999, value=42)
 
-    return GAConfig(
-        population_size=population_size,
-        generations=generations,
-        crossover_rate=crossover_rate,
-        mutation_rate=mutation_rate,
-        elitism=elitism,
-        selection_method=selection_method,
-        tournament_size=tournament_size,
-        crossover_method=crossover_method,
-        mutation_operator=mutation_operator,
-        route_update_every=route_update_every,
-        analytics_update_every=analytics_update_every,
-        heatmap_update_every=heatmap_update_every,
-        frame_delay=frame_delay,
-        random_seed=int(random_seed),
+    return (
+        GAConfig(
+            population_size=population_size,
+            generations=generations,
+            crossover_rate=crossover_rate,
+            mutation_rate=mutation_rate,
+            elitism=elitism,
+            selection_method=selection_method,
+            tournament_size=tournament_size,
+            crossover_method=crossover_method,
+            mutation_operator=mutation_operator,
+            route_update_every=route_update_every,
+            analytics_update_every=analytics_update_every,
+            heatmap_update_every=heatmap_update_every,
+            frame_delay=frame_delay,
+            random_seed=int(random_seed),
+        ),
+        run_button,
+        clear_button,
     )
 
 
@@ -706,10 +713,7 @@ def main() -> None:
         c1.write(cities[["plate", "city", "lat", "lon"]].head(10))
         c2.write(cities[["plate", "city", "lat", "lon"]].tail(10))
 
-    config = configure_sidebar()
-
-    run_button = st.sidebar.button("Calistir", type="primary", use_container_width=True)
-    clear_button = st.sidebar.button("Oturumu sifirla", use_container_width=True)
+    config, run_button, clear_button = configure_sidebar()
 
     if clear_button:
         for key in list(st.session_state.keys()):
