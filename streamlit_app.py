@@ -679,7 +679,7 @@ def run_genetic_algorithm(cities: pd.DataFrame, config: GAConfig) -> dict:
 def main() -> None:
     st.set_page_config(page_title="GA TSP Turkiye 81 Il", page_icon=":round_pushpin:", layout="wide")
     st.markdown(
-        "### Ostim Teknik Üniversitesi Yazılım Mühendisliği  Akıllı Optimizasyon Algoritmaları  YL dersi Uygulama"
+        "### Ostim Teknik Üniversitesi Yazılım Mühendisliği  Akıllı Optimizasyon Algoritmaları"
     )
     st.title("Genetik Algoritma ile TSP: Turkiye'de 81 Il Turu (Izmir baslangic/donus)")
     st.caption(
