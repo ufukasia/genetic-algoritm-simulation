@@ -13,6 +13,7 @@ import streamlit as st
 
 
 EARTH_RADIUS_KM = 6371.0088
+PSO_ALGORITHM_NAME = "Particle Swarm Optimization (PSO)"
 TR_ASCII = str.maketrans(
     {
         "\u00C7": "C",
@@ -51,6 +52,76 @@ class GAConfig:
     random_seed: int
 
 
+@dataclass
+class SAConfig:
+    iterations: int
+    initial_temperature: float
+    cooling_rate: float
+    min_temperature: float
+    neighbor_operator: str
+    two_opt_every: int
+    stagnation_limit: int
+    reheat_ratio: float
+    route_update_every: int
+    analytics_update_every: int
+    moves_update_every: int
+    frame_delay: float
+    random_seed: int
+
+
+@dataclass
+class ACOConfig:
+    ant_count: int
+    iterations: int
+    alpha: float
+    beta: float
+    evaporation_rate: float
+    pheromone_constant: float
+    elitist_weight: int
+    candidate_k: int
+    two_opt_every: int
+    route_update_every: int
+    analytics_update_every: int
+    ants_update_every: int
+    frame_delay: float
+    random_seed: int
+
+
+@dataclass
+class PSOConfig:
+    problem_name: str
+    swarm_size: int
+    iterations: int
+    inertia_weight: float
+    cognitive_coeff: float
+    social_coeff: float
+    velocity_clamp_ratio: float
+    route_update_every: int
+    analytics_update_every: int
+    frame_delay: float
+    random_seed: int
+
+
+@dataclass
+class PSOProblem:
+    name: str
+    lower_bounds: np.ndarray
+    upper_bounds: np.ndarray
+    objective: callable
+    description: str
+    global_min: np.ndarray
+    global_min_value: float
+
+
+PSO_PROBLEM_LABELS = [
+    "Schwefel",
+    "Ackley (shifted)",
+    "Rastrigin (shifted+rotated)",
+    "Rosenbrock (genis)",
+    "Levy",
+]
+
+
 def normalize_city_name(value: str) -> str:
     return str(value).strip().translate(TR_ASCII).upper()
 
@@ -67,6 +138,122 @@ def parse_coordinate(raw_value: str) -> float:
     if abs(value) > 180 and token.replace(".", "").isdigit():
         value = float(token.replace(".", "")) / 1_000_000
     return value
+
+
+# ---------- PSO Benchmark Fonksiyonlari ----------
+
+def schwefel_objective(x: np.ndarray) -> float:
+    """Schwefel: yaniltici, global minimum merkezden cok uzakta."""
+    n = len(x)
+    return float(418.9829 * n - np.sum(x * np.sin(np.sqrt(np.abs(x)))))
+
+
+def ackley_shifted_objective(x: np.ndarray) -> float:
+    """Ackley (shifted): duz plato + keskin ibre seklinde minimum."""
+    shift = np.array([2.8, -3.5])
+    z = x - shift
+    n = len(z)
+    sum_sq = np.sum(z * z)
+    sum_cos = np.sum(np.cos(2.0 * np.pi * z))
+    return float(-20.0 * np.exp(-0.2 * np.sqrt(sum_sq / n))
+                 - np.exp(sum_cos / n) + 20.0 + np.e)
+
+
+def rastrigin_shifted_rotated_objective(x: np.ndarray) -> float:
+    """Rastrigin (shifted + 30 derece rotated): cok yerel minimumlu."""
+    shift = np.array([-3.2, 4.1])
+    theta = np.radians(30.0)
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+    rot = np.array([[cos_t, -sin_t], [sin_t, cos_t]])
+    z = rot @ (x - shift)
+    n = len(z)
+    return float(10.0 * n + np.sum(z * z - 10.0 * np.cos(2.0 * np.pi * z)))
+
+
+def rosenbrock_wide_objective(x: np.ndarray) -> float:
+    """Rosenbrock genis uzayda: dar, kavisli vadi."""
+    return float(np.sum(100.0 * (x[1:] - x[:-1] ** 2) ** 2 + (x[:-1] - 1.0) ** 2))
+
+
+def levy_objective(x: np.ndarray) -> float:
+    """Levy fonksiyonu: karmasik cok-modlu."""
+    w = 1.0 + (x - 1.0) / 4.0
+    term1 = np.sin(np.pi * w[0]) ** 2
+    term2 = np.sum((w[:-1] - 1.0) ** 2 * (1.0 + 10.0 * np.sin(np.pi * w[:-1] + 1.0) ** 2))
+    term3 = (w[-1] - 1.0) ** 2 * (1.0 + np.sin(2.0 * np.pi * w[-1]) ** 2)
+    return float(term1 + term2 + term3)
+
+
+def build_pso_problem(problem_name: str) -> PSOProblem:
+    if problem_name == "Schwefel":
+        lb = np.array([-500.0, -500.0])
+        ub = np.array([500.0, 500.0])
+        return PSOProblem(
+            problem_name, lb, ub, schwefel_objective,
+            (
+                "f(x) = 418.9829*n - sum(xi * sin(sqrt(|xi|)))\n"
+                "Global minimum: f(420.9687, 420.9687) = 0\n"
+                "En yaniltici benchmark: minimum, arama uzayinin koseninde!\n"
+                "Suru, merkezden cok uzaktaki global minimumu bulmak zorunda."
+            ),
+            np.array([420.9687, 420.9687]), 0.0,
+        )
+
+    if problem_name == "Ackley (shifted)":
+        lb = np.array([-30.0, -30.0])
+        ub = np.array([30.0, 30.0])
+        return PSOProblem(
+            problem_name, lb, ub, ackley_shifted_objective,
+            (
+                "f(x) = -20*exp(-0.2*sqrt(sum/n)) - exp(sum_cos/n) + 20 + e\n"
+                "Global minimum: f(2.8, -3.5) = 0 (shifted)\n"
+                "Duz plato + dar ibre seklinde minimum. Suru platoda kaybolabilir."
+            ),
+            np.array([2.8, -3.5]), 0.0,
+        )
+
+    if problem_name == "Rastrigin (shifted+rotated)":
+        lb = np.array([-15.0, -15.0])
+        ub = np.array([15.0, 15.0])
+        return PSOProblem(
+            problem_name, lb, ub, rastrigin_shifted_rotated_objective,
+            (
+                "f(x) = 10*n + sum(zi^2 - 10*cos(2*pi*zi)), z = R*(x-shift)\n"
+                "Global minimum: f(-3.2, 4.1) = 0 (shifted + 30 derece rotated)\n"
+                "50+ yerel minimum! Suru yerel minimumlara takilabilir."
+            ),
+            np.array([-3.2, 4.1]), 0.0,
+        )
+
+    if problem_name == "Rosenbrock (genis)":
+        lb = np.array([-30.0, -30.0])
+        ub = np.array([30.0, 30.0])
+        return PSOProblem(
+            problem_name, lb, ub, rosenbrock_wide_objective,
+            (
+                "f(x) = 100*(x2-x1^2)^2 + (x1-1)^2\n"
+                "Global minimum: f(1, 1) = 0\n"
+                "Genis uzayda dar, kavisli 'muz' vadisi.\n"
+                "Suru vadiyi bulsa bile minimum noktaya yurumek cok zor."
+            ),
+            np.array([1.0, 1.0]), 0.0,
+        )
+
+    if problem_name == "Levy":
+        lb = np.array([-10.0, -10.0])
+        ub = np.array([10.0, 10.0])
+        return PSOProblem(
+            problem_name, lb, ub, levy_objective,
+            (
+                "f(x) = sin^2(pi*w1) + sum((wi-1)^2*(1+10*sin^2(pi*wi+1)))\n"
+                "         + (wn-1)^2*(1+sin^2(2*pi*wn)), w = 1+(x-1)/4\n"
+                "Global minimum: f(1, 1) = 0\n"
+                "Karmasik, cok-modlu peyzaj. Simetrik gorunur ama yaniltici."
+            ),
+            np.array([1.0, 1.0]), 0.0,
+        )
+
+    raise ValueError(f"Desteklenmeyen problem: {problem_name}")
 
 
 @st.cache_data(show_spinner=False)
@@ -236,6 +423,141 @@ def mutate_chromosome(
     return mutated, event
 
 
+def apply_two_opt_segment(chromosome: np.ndarray, i: int, j: int) -> np.ndarray:
+    mutated = chromosome.copy()
+    mutated[i : j + 1] = mutated[i : j + 1][::-1]
+    return mutated
+
+
+def two_opt_delta(
+    chromosome: np.ndarray,
+    i: int,
+    j: int,
+    start_idx: int,
+    distance_matrix: np.ndarray,
+) -> float:
+    if i == j:
+        return 0.0
+
+    city_a = start_idx if i == 0 else int(chromosome[i - 1])
+    city_b = int(chromosome[i])
+    city_c = int(chromosome[j])
+    city_d = start_idx if j == len(chromosome) - 1 else int(chromosome[j + 1])
+
+    removed = distance_matrix[city_a, city_b] + distance_matrix[city_c, city_d]
+    added = distance_matrix[city_a, city_c] + distance_matrix[city_b, city_d]
+    return float(added - removed)
+
+
+def propose_sa_neighbor(
+    chromosome: np.ndarray,
+    current_distance: float,
+    operator: str,
+    start_idx: int,
+    distance_matrix: np.ndarray,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, float, dict]:
+    n = len(chromosome)
+    use_operator = operator
+    if operator == "2-Opt + Swap (onerilen)":
+        use_operator = "2-Opt" if rng.random() < 0.75 else "Swap"
+
+    if use_operator == "2-Opt":
+        i, j = sorted(rng.choice(n, size=2, replace=False))
+        candidate = apply_two_opt_segment(chromosome, int(i), int(j))
+        delta = two_opt_delta(chromosome, int(i), int(j), start_idx, distance_matrix)
+        event = {
+            "operator": "2-Opt",
+            "positions": f"{int(i)}-{int(j)}",
+            "before": chromosome[int(i) : int(j) + 1].tolist(),
+            "after": candidate[int(i) : int(j) + 1].tolist(),
+        }
+        return candidate, current_distance + delta, event
+
+    mapped = use_operator if use_operator in {"Swap", "Inversion", "Scramble"} else "Scramble"
+    candidate, event = mutate_chromosome(chromosome, mutation_rate=1.0, operator=mapped, rng=rng)
+    candidate_distance = route_distance(candidate, start_idx, distance_matrix)
+    return candidate, candidate_distance, event or {}
+
+
+def best_two_opt_improvement(
+    chromosome: np.ndarray,
+    current_distance: float,
+    start_idx: int,
+    distance_matrix: np.ndarray,
+) -> tuple[np.ndarray, float, tuple[int, int] | None]:
+    n = len(chromosome)
+    best_delta = 0.0
+    best_pair: tuple[int, int] | None = None
+
+    for i in range(n - 1):
+        for j in range(i + 1, n):
+            delta = two_opt_delta(chromosome, i, j, start_idx, distance_matrix)
+            if delta < best_delta:
+                best_delta = delta
+                best_pair = (i, j)
+
+    if best_pair is None:
+        return chromosome, current_distance, None
+
+    improved = apply_two_opt_segment(chromosome, best_pair[0], best_pair[1])
+    return improved, current_distance + best_delta, best_pair
+
+
+def construct_aco_route(
+    start_idx: int,
+    available_cities: np.ndarray,
+    pheromone: np.ndarray,
+    heuristic: np.ndarray,
+    alpha: float,
+    beta: float,
+    candidate_k: int,
+    nearest_neighbors: list[np.ndarray],
+    rng: np.random.Generator,
+) -> np.ndarray:
+    unvisited = set(int(city) for city in available_cities.tolist())
+    route: list[int] = []
+    current = start_idx
+
+    for _ in range(len(available_cities)):
+        if candidate_k > 0:
+            near = [city for city in nearest_neighbors[current][:candidate_k] if city in unvisited]
+            candidates = near if near else list(unvisited)
+        else:
+            candidates = list(unvisited)
+
+        candidate_arr = np.asarray(candidates, dtype=np.int16)
+        tau = np.power(pheromone[current, candidate_arr], alpha)
+        eta = np.power(heuristic[current, candidate_arr], beta)
+        weights = tau * eta
+        total = float(weights.sum())
+
+        if not np.isfinite(total) or total <= 0.0:
+            next_city = int(rng.choice(candidate_arr))
+        else:
+            probs = weights / total
+            next_city = int(rng.choice(candidate_arr, p=probs))
+
+        route.append(next_city)
+        unvisited.remove(next_city)
+        current = next_city
+
+    return np.asarray(route, dtype=np.int16)
+
+
+def add_pheromone_for_route(
+    pheromone: np.ndarray,
+    route: np.ndarray,
+    start_idx: int,
+    delta_pheromone: float,
+) -> None:
+    full_route = np.concatenate(([start_idx], route, [start_idx]))
+    from_nodes = full_route[:-1]
+    to_nodes = full_route[1:]
+    pheromone[from_nodes, to_nodes] += delta_pheromone
+    pheromone[to_nodes, from_nodes] += delta_pheromone
+
+
 def crossover_pair(
     parent1: np.ndarray,
     parent2: np.ndarray,
@@ -265,7 +587,11 @@ def population_diversity(
 
 
 def build_route_figure(
-    route_idx: np.ndarray, cities: pd.DataFrame, generation: int, distance_km: float
+    route_idx: np.ndarray,
+    cities: pd.DataFrame,
+    generation: int,
+    distance_km: float,
+    step_label: str = "Nesil",
 ) -> go.Figure:
     lat = cities.loc[route_idx, "lat"].to_numpy()
     lon = cities.loc[route_idx, "lon"].to_numpy()
@@ -296,7 +622,7 @@ def build_route_figure(
         )
     )
     fig.update_layout(
-        title=f"Nesil {generation} | En iyi tur: {distance_km:,.1f} km",
+        title=f"{step_label} {generation} | En iyi tur: {distance_km:,.1f} km",
         height=460,
         margin=dict(l=0, r=0, t=55, b=0),
         geo=dict(
@@ -364,6 +690,494 @@ def build_diversity_figure(unique_hist: list[float], hamming_hist: list[float]) 
         margin=dict(l=0, r=0, t=35, b=0),
         yaxis=dict(title="Benzersiz oran", range=[0, 1]),
         yaxis2=dict(title="Hamming", overlaying="y", side="right", range=[0, 1]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0),
+    )
+    return fig
+
+
+def build_sa_progress_figure(best_hist: list[float], current_hist: list[float]) -> go.Figure:
+    frame = pd.DataFrame(
+        {
+            "Iterasyon": np.arange(1, len(best_hist) + 1),
+            "En iyi (km)": best_hist,
+            "Mevcut (km)": current_hist,
+        }
+    )
+    fig = px.line(
+        frame,
+        x="Iterasyon",
+        y=["En iyi (km)", "Mevcut (km)"],
+        labels={"value": "Mesafe (km)", "variable": "Olcum"},
+    )
+    fig.update_layout(height=290, margin=dict(l=0, r=0, t=35, b=0), legend_title_text="")
+    return fig
+
+
+def build_sa_temperature_figure(
+    temperature_hist: list[float], acceptance_hist: list[float]
+) -> go.Figure:
+    iterations = np.arange(1, len(temperature_hist) + 1)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=iterations,
+            y=temperature_hist,
+            mode="lines",
+            name="Sicaklik",
+            yaxis="y1",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=iterations,
+            y=acceptance_hist,
+            mode="lines",
+            name="Kabul orani",
+            yaxis="y2",
+        )
+    )
+    fig.update_layout(
+        height=290,
+        margin=dict(l=0, r=0, t=35, b=0),
+        yaxis=dict(title="Sicaklik"),
+        yaxis2=dict(title="Kabul orani", overlaying="y", side="right", range=[0, 1]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0),
+    )
+    return fig
+
+
+def build_sa_moves_figure(move_events: deque) -> go.Figure:
+    events = list(move_events)
+    if not events:
+        fig = go.Figure()
+        fig.update_layout(
+            title="Son hamle degisimleri",
+            height=380,
+            margin=dict(l=0, r=0, t=45, b=0),
+            xaxis_title="Iterasyon",
+            yaxis_title="delta km",
+        )
+        fig.add_annotation(
+            text="Henuz hamle verisi yok",
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+        )
+        return fig
+
+    frame = pd.DataFrame(events)
+    frame["durum"] = frame["accepted"].map({True: "Kabul", False: "Red"})
+    fig = px.bar(
+        frame,
+        x="iteration",
+        y="delta_km",
+        color="durum",
+        color_discrete_map={"Kabul": "#2a9d8f", "Red": "#d62828"},
+        hover_data=["temperature", "accepted_worse", "operator", "positions"],
+    )
+    fig.update_layout(
+        title=f"Son {len(events)} hamlenin delta km dagilimi",
+        height=380,
+        margin=dict(l=0, r=0, t=45, b=0),
+        xaxis_title="Iterasyon",
+        yaxis_title="delta km",
+        legend_title_text="",
+    )
+    return fig
+
+
+def build_aco_progress_figure(best_hist: list[float], iter_best_hist: list[float]) -> go.Figure:
+    frame = pd.DataFrame(
+        {
+            "Iterasyon": np.arange(1, len(best_hist) + 1),
+            "Global en iyi (km)": best_hist,
+            "Iterasyon en iyi (km)": iter_best_hist,
+        }
+    )
+    fig = px.line(
+        frame,
+        x="Iterasyon",
+        y=["Global en iyi (km)", "Iterasyon en iyi (km)"],
+        labels={"value": "Mesafe (km)", "variable": "Olcum"},
+    )
+    fig.update_layout(height=290, margin=dict(l=0, r=0, t=35, b=0), legend_title_text="")
+    return fig
+
+
+def build_aco_pheromone_figure(
+    pheromone_mean_hist: list[float], pheromone_max_hist: list[float]
+) -> go.Figure:
+    iterations = np.arange(1, len(pheromone_mean_hist) + 1)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=iterations,
+            y=pheromone_mean_hist,
+            mode="lines",
+            name="Ortalama feromon",
+            yaxis="y1",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=iterations,
+            y=pheromone_max_hist,
+            mode="lines",
+            name="Maks feromon",
+            yaxis="y2",
+        )
+    )
+    fig.update_layout(
+        height=290,
+        margin=dict(l=0, r=0, t=35, b=0),
+        yaxis=dict(title="Ortalama"),
+        yaxis2=dict(title="Maks", overlaying="y", side="right"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0),
+    )
+    return fig
+
+
+def build_aco_ant_distance_figure(ant_distances: np.ndarray) -> go.Figure:
+    if ant_distances.size == 0:
+        fig = go.Figure()
+        fig.update_layout(
+            title="Karinca mesafe dagilimi",
+            height=380,
+            margin=dict(l=0, r=0, t=45, b=0),
+        )
+        return fig
+
+    sorted_distances = np.sort(ant_distances.astype(float))
+    sample = sorted_distances[: min(40, len(sorted_distances))]
+    frame = pd.DataFrame({"Karinca": np.arange(1, len(sample) + 1), "Tur mesafesi (km)": sample})
+    fig = px.bar(frame, x="Karinca", y="Tur mesafesi (km)")
+    fig.update_layout(
+        title=f"Bu iterasyondaki en iyi {len(sample)} karinca",
+        height=380,
+        margin=dict(l=0, r=0, t=45, b=0),
+        xaxis_title="Karinca sirasi (iyi -> kotu)",
+    )
+    return fig
+
+
+def build_aco_swarm_figure(
+    cities: pd.DataFrame,
+    start_idx: int,
+    best_route_idx: np.ndarray,
+    pheromone: np.ndarray,
+    ant_routes: list[np.ndarray],
+    ant_distances: np.ndarray,
+    iteration: int,
+    best_distance: float,
+    max_pheromone_edges: int = 260,
+    max_swarm_routes: int = 14,
+) -> go.Figure:
+    lat_all = cities["lat"].to_numpy()
+    lon_all = cities["lon"].to_numpy()
+    names_all = cities["city"].to_numpy()
+    n_cities = len(cities)
+
+    fig = go.Figure()
+
+    # Draw strongest pheromone edges as a layered network.
+    upper_i, upper_j = np.triu_indices(n_cities, k=1)
+    upper_values = pheromone[upper_i, upper_j]
+    edge_count = min(max_pheromone_edges, len(upper_values))
+    if edge_count > 0:
+        pick = np.argpartition(upper_values, -edge_count)[-edge_count:]
+        edge_i = upper_i[pick]
+        edge_j = upper_j[pick]
+        edge_v = upper_values[pick]
+
+        v_min = float(np.min(edge_v))
+        v_max = float(np.max(edge_v))
+        span = max(v_max - v_min, 1e-12)
+        edge_norm = (edge_v - v_min) / span
+
+        layer_specs = [
+            ("Feromon dusuk", edge_norm < 0.33, "rgba(16,185,129,0.12)", 0.7),
+            (
+                "Feromon orta",
+                (edge_norm >= 0.33) & (edge_norm < 0.66),
+                "rgba(16,185,129,0.24)",
+                1.5,
+            ),
+            ("Feromon yuksek", edge_norm >= 0.66, "rgba(5,150,105,0.42)", 2.8),
+        ]
+
+        for layer_name, mask, color, width in layer_specs:
+            if not np.any(mask):
+                continue
+
+            lat_segments: list[float | None] = []
+            lon_segments: list[float | None] = []
+            text_segments: list[str | None] = []
+            layer_i = edge_i[mask]
+            layer_j = edge_j[mask]
+            layer_v = edge_v[mask]
+
+            for a, b, value in zip(layer_i, layer_j, layer_v):
+                a = int(a)
+                b = int(b)
+                lat_segments.extend([float(lat_all[a]), float(lat_all[b]), None])
+                lon_segments.extend([float(lon_all[a]), float(lon_all[b]), None])
+                label = f"{names_all[a]} <-> {names_all[b]}<br>Feromon: {float(value):.5f}"
+                text_segments.extend([label, label, None])
+
+            fig.add_trace(
+                go.Scattergeo(
+                    lat=lat_segments,
+                    lon=lon_segments,
+                    text=text_segments,
+                    mode="lines",
+                    line=dict(width=width, color=color),
+                    hoverinfo="text",
+                    name=layer_name,
+                    showlegend=True,
+                )
+            )
+
+    # Show ant swarm as semi-transparent route bundle (best ants of this iteration).
+    if ant_distances.size > 0 and ant_routes:
+        top_ant_ids = np.argsort(ant_distances)[: min(max_swarm_routes, len(ant_routes))]
+        for rank, ant_id in enumerate(top_ant_ids):
+            ant_id = int(ant_id)
+            full_route = np.concatenate(([start_idx], ant_routes[ant_id], [start_idx]))
+            lat_route = cities.iloc[full_route]["lat"].to_numpy()
+            lon_route = cities.iloc[full_route]["lon"].to_numpy()
+            fig.add_trace(
+                go.Scattergeo(
+                    lat=lat_route,
+                    lon=lon_route,
+                    mode="lines",
+                    line=dict(width=1.0, color="rgba(59,130,246,0.10)"),
+                    hoverinfo="skip",
+                    name="Karinca surusu",
+                    showlegend=(rank == 0),
+                )
+            )
+
+    # Overlay global best route for readability.
+    best_route_idx = np.asarray(best_route_idx, dtype=np.int32)
+    lat_best = cities.iloc[best_route_idx]["lat"].to_numpy()
+    lon_best = cities.iloc[best_route_idx]["lon"].to_numpy()
+    name_best = cities.iloc[best_route_idx]["city"].tolist()
+    fig.add_trace(
+        go.Scattergeo(
+            lat=lat_best,
+            lon=lon_best,
+            mode="lines+markers",
+            line=dict(width=3.2, color="#ef4444"),
+            marker=dict(size=5, color="#1e3a8a"),
+            text=name_best,
+            hovertemplate="%{text}<extra></extra>",
+            name="Global en iyi tur",
+        )
+    )
+
+    node_strength = pheromone.sum(axis=1)
+    node_min = float(np.min(node_strength))
+    node_max = float(np.max(node_strength))
+    node_span = max(node_max - node_min, 1e-12)
+    node_size = 4.0 + 8.0 * (node_strength - node_min) / node_span
+    fig.add_trace(
+        go.Scattergeo(
+            lat=lat_all,
+            lon=lon_all,
+            mode="markers",
+            marker=dict(
+                size=node_size,
+                color=node_strength,
+                colorscale="YlGn",
+                opacity=0.75,
+                line=dict(width=0.5, color="rgba(15,23,42,0.5)"),
+                colorbar=dict(title="Dugum feromon gucu"),
+            ),
+            text=names_all,
+            hovertemplate="%{text}<br>Dugum gucu: %{marker.color:.5f}<extra></extra>",
+            name="Feromon dugum yogunlugu",
+        )
+    )
+
+    fig.add_trace(
+        go.Scattergeo(
+            lat=[float(lat_all[start_idx])],
+            lon=[float(lon_all[start_idx])],
+            mode="markers+text",
+            marker=dict(size=12, color="#22c55e"),
+            text=[f"Baslangic: {names_all[start_idx]}"],
+            textposition="top center",
+            name="Baslangic",
+        )
+    )
+
+    fig.update_layout(
+        title=f"ACO Swarm | Iterasyon {iteration} | En iyi tur: {best_distance:,.1f} km",
+        height=460,
+        margin=dict(l=0, r=0, t=55, b=0),
+        geo=dict(
+            projection_type="mercator",
+            showland=True,
+            landcolor="#eef2ff",
+            showcountries=True,
+            countrycolor="#94a3b8",
+            center=dict(lat=39.0, lon=35.0),
+            lataxis=dict(range=[35.2, 42.8]),
+            lonaxis=dict(range=[25.5, 45.5]),
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0),
+    )
+    return fig
+
+
+def build_aco_hyperspace_figure(
+    cities: pd.DataFrame,
+    start_idx: int,
+    best_route_idx: np.ndarray,
+    pheromone: np.ndarray,
+    ant_routes: list[np.ndarray],
+    ant_distances: np.ndarray,
+    iteration: int,
+    best_distance: float,
+    max_pheromone_edges: int = 240,
+    max_swarm_routes: int = 12,
+) -> go.Figure:
+    lat_all = cities["lat"].to_numpy(dtype=np.float64)
+    lon_all = cities["lon"].to_numpy(dtype=np.float64)
+    names_all = cities["city"].to_numpy()
+    node_strength = pheromone.sum(axis=1).astype(np.float64)
+    strength_min = float(np.min(node_strength))
+    strength_max = float(np.max(node_strength))
+    strength_span = max(strength_max - strength_min, 1e-12)
+    z_all = 5.0 + 95.0 * (node_strength - strength_min) / strength_span
+
+    fig = go.Figure()
+    n_cities = len(cities)
+    upper_i, upper_j = np.triu_indices(n_cities, k=1)
+    upper_values = pheromone[upper_i, upper_j]
+    edge_count = min(max_pheromone_edges, len(upper_values))
+    if edge_count > 0:
+        pick = np.argpartition(upper_values, -edge_count)[-edge_count:]
+        edge_i = upper_i[pick]
+        edge_j = upper_j[pick]
+        edge_v = upper_values[pick]
+        v_min = float(np.min(edge_v))
+        v_max = float(np.max(edge_v))
+        v_span = max(v_max - v_min, 1e-12)
+        edge_norm = (edge_v - v_min) / v_span
+
+        layers = [
+            ("Feromon dusuk", edge_norm < 0.33, "rgba(34,197,94,0.12)", 1.0),
+            ("Feromon orta", (edge_norm >= 0.33) & (edge_norm < 0.66), "rgba(34,197,94,0.24)", 1.9),
+            ("Feromon yuksek", edge_norm >= 0.66, "rgba(22,163,74,0.42)", 3.2),
+        ]
+        for name, mask, color, width in layers:
+            if not np.any(mask):
+                continue
+            xs: list[float | None] = []
+            ys: list[float | None] = []
+            zs: list[float | None] = []
+            texts: list[str | None] = []
+            for a, b, value in zip(edge_i[mask], edge_j[mask], edge_v[mask]):
+                a = int(a)
+                b = int(b)
+                xs.extend([float(lon_all[a]), float(lon_all[b]), None])
+                ys.extend([float(lat_all[a]), float(lat_all[b]), None])
+                zs.extend([float(z_all[a]), float(z_all[b]), None])
+                t = f"{names_all[a]} <-> {names_all[b]}<br>Feromon: {float(value):.5f}"
+                texts.extend([t, t, None])
+            fig.add_trace(
+                go.Scatter3d(
+                    x=xs,
+                    y=ys,
+                    z=zs,
+                    mode="lines",
+                    line=dict(color=color, width=width),
+                    text=texts,
+                    hoverinfo="text",
+                    name=name,
+                    showlegend=True,
+                )
+            )
+
+    if ant_distances.size > 0 and ant_routes:
+        top_ant_ids = np.argsort(ant_distances)[: min(max_swarm_routes, len(ant_routes))]
+        for rank, ant_id in enumerate(top_ant_ids):
+            ant_id = int(ant_id)
+            full_route = np.concatenate(([start_idx], ant_routes[ant_id], [start_idx]))
+            fig.add_trace(
+                go.Scatter3d(
+                    x=lon_all[full_route],
+                    y=lat_all[full_route],
+                    z=z_all[full_route],
+                    mode="lines",
+                    line=dict(width=1.2, color="rgba(59,130,246,0.18)"),
+                    hoverinfo="skip",
+                    name="Karinca surusu",
+                    showlegend=(rank == 0),
+                )
+            )
+
+    best_route_idx = np.asarray(best_route_idx, dtype=np.int32)
+    fig.add_trace(
+        go.Scatter3d(
+            x=lon_all[best_route_idx],
+            y=lat_all[best_route_idx],
+            z=z_all[best_route_idx],
+            mode="lines+markers",
+            line=dict(width=5, color="#ef4444"),
+            marker=dict(size=4, color="#1e3a8a"),
+            text=names_all[best_route_idx],
+            hovertemplate="%{text}<extra></extra>",
+            name="Global en iyi tur",
+        )
+    )
+
+    marker_size = 3.5 + 7.0 * (node_strength - strength_min) / strength_span
+    fig.add_trace(
+        go.Scatter3d(
+            x=lon_all,
+            y=lat_all,
+            z=z_all,
+            mode="markers",
+            marker=dict(
+                size=marker_size,
+                color=node_strength,
+                colorscale="YlGn",
+                opacity=0.84,
+                colorbar=dict(title="Dugum feromon gucu"),
+            ),
+            text=names_all,
+            hovertemplate="%{text}<br>Dugum gucu: %{marker.color:.5f}<extra></extra>",
+            name="Feromon dugumleri",
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=[float(lon_all[start_idx])],
+            y=[float(lat_all[start_idx])],
+            z=[float(z_all[start_idx])],
+            mode="markers+text",
+            marker=dict(size=10, color="#22c55e"),
+            text=[f"Baslangic: {names_all[start_idx]}"],
+            textposition="top center",
+            name="Baslangic",
+        )
+    )
+
+    fig.update_layout(
+        title=f"ACO Hyperspace | Iterasyon {iteration} | En iyi tur: {best_distance:,.1f} km",
+        height=500,
+        margin=dict(l=0, r=0, t=55, b=0),
+        scene=dict(
+            xaxis_title="Boylam",
+            yaxis_title="Enlem",
+            zaxis_title="Feromon yuksekligi",
+            bgcolor="rgba(241,245,249,0.65)",
+        ),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0),
     )
     return fig
@@ -454,38 +1268,604 @@ def build_live_info_text(
     return "\n".join(lines)
 
 
-def configure_sidebar() -> tuple[GAConfig, bool, bool]:
+def build_sa_live_info_text(
+    iteration: int,
+    config: SAConfig,
+    temperature: float,
+    best_distance: float,
+    current_distance: float,
+    first_best: float,
+    accepted_counter: int,
+    worse_accepted_counter: int,
+    local_search_counter: int,
+    reheat_counter: int,
+    stagnation_counter: int,
+    best_route: np.ndarray,
+    move_events: deque,
+    cities: pd.DataFrame,
+) -> str:
+    improvement = ((first_best - best_distance) / first_best) * 100 if iteration > 1 else 0.0
+    route_names = [cities.iloc[int(idx)]["city"] for idx in best_route[:16]]
+    route_preview = " -> ".join(route_names)
+    if len(best_route) > 16:
+        route_preview += " -> ..."
+
+    acceptance_ratio = accepted_counter / iteration
+    worse_ratio = worse_accepted_counter / iteration
+    lines = [
+        f"Iterasyon: {iteration}/{config.iterations}",
+        f"Sicaklik: {temperature:.6f}",
+        f"En iyi tur: {best_distance:,.1f} km",
+        f"Mevcut tur: {current_distance:,.1f} km",
+        f"Iyilesme: %{improvement:.2f}",
+        f"Kabul edilen hamle: {accepted_counter} (%{acceptance_ratio * 100:.2f})",
+        f"Kotu ama kabul: {worse_accepted_counter} (%{worse_ratio * 100:.2f})",
+        f"2-Opt yerel iyilestirme: {local_search_counter}",
+        f"Reheat: {reheat_counter} | Stagnasyon sayaci: {stagnation_counter}",
+        "",
+        "Rota onizleme:",
+        route_preview,
+        "",
+        "Son hamleler:",
+    ]
+
+    if not move_events:
+        lines.append("(Hamle kaydi henuz yok)")
+        return "\n".join(lines)
+
+    for event in list(move_events)[::-1]:
+        before = ids_to_city_names(event["before"], cities, max_items=4)
+        after = ids_to_city_names(event["after"], cities, max_items=4)
+        decision = "kabul" if event["accepted"] else "red"
+        lines.append(
+            f"I{event['iteration']} | {event['operator']} {event['positions']} | d={event['delta_km']:+.1f} km | T={event['temperature']:.4f} | {decision}"
+        )
+        lines.append(f"  once: {before}")
+        lines.append(f"  sonra: {after}")
+
+    return "\n".join(lines)
+
+
+def build_aco_live_info_text(
+    iteration: int,
+    config: ACOConfig,
+    best_distance: float,
+    iteration_best_distance: float,
+    first_best: float,
+    pheromone_mean: float,
+    pheromone_max: float,
+    local_search_counter: int,
+    best_route: np.ndarray,
+    iteration_events: deque,
+    cities: pd.DataFrame,
+) -> str:
+    improvement = ((first_best - best_distance) / first_best) * 100 if iteration > 1 else 0.0
+    route_names = [cities.iloc[int(idx)]["city"] for idx in best_route[:16]]
+    route_preview = " -> ".join(route_names)
+    if len(best_route) > 16:
+        route_preview += " -> ..."
+
+    lines = [
+        f"Iterasyon: {iteration}/{config.iterations}",
+        f"Global en iyi tur: {best_distance:,.1f} km",
+        f"Iterasyon en iyi tur: {iteration_best_distance:,.1f} km",
+        f"Iyilesme: %{improvement:.2f}",
+        f"Karinca sayisi: {config.ant_count}",
+        f"Buharlasma: {config.evaporation_rate:.3f}",
+        f"2-Opt iyilestirme sayisi: {local_search_counter}",
+        f"Feromon ortalama: {pheromone_mean:.6f} | maks: {pheromone_max:.6f}",
+        "",
+        "Rota onizleme:",
+        route_preview,
+        "",
+        "Son iterasyonlar:",
+    ]
+
+    if not iteration_events:
+        lines.append("(Iterasyon ozeti henuz yok)")
+        return "\n".join(lines)
+
+    for event in list(iteration_events)[::-1]:
+        local = "2-opt" if event["local_search"] else "-"
+        lines.append(
+            f"I{event['iteration']} | iter_best={event['iteration_best']:,.1f} | global={event['global_best']:,.1f} | pher={event['pheromone_mean']:.5f}/{event['pheromone_max']:.5f} | {local}"
+        )
+
+    return "\n".join(lines)
+
+
+def build_pso_3d_surface_figure(
+    problem: PSOProblem,
+    positions: np.ndarray,
+    fitness: np.ndarray,
+    velocities: np.ndarray,
+    pbest_positions: np.ndarray,
+    pbest_fitness: np.ndarray,
+    gbest_position: np.ndarray,
+    gbest_value: float,
+    gbest_history: list[np.ndarray],
+    iteration: int,
+    grid_resolution: int = 80,
+) -> go.Figure:
+    """3D yuzey uzerinde parcaciklari, hiz vektorlerini, personal/global best gorsellestirmesi."""
+    lb = problem.lower_bounds
+    ub = problem.upper_bounds
+
+    x_grid = np.linspace(lb[0], ub[0], grid_resolution)
+    y_grid = np.linspace(lb[1], ub[1], grid_resolution)
+    X, Y = np.meshgrid(x_grid, y_grid)
+    Z = np.zeros_like(X)
+    for i in range(grid_resolution):
+        for j in range(grid_resolution):
+            Z[i, j] = problem.objective(np.array([X[i, j], Y[i, j]]))
+
+    z_cap = np.percentile(Z, 97)
+    Z_capped = np.clip(Z, None, z_cap)
+
+    fig = go.Figure()
+
+    # ---- 1. Fonksiyon yuzeyi (yari seffaf) ----
+    fig.add_trace(
+        go.Surface(
+            x=X, y=Y, z=Z_capped,
+            colorscale="Viridis",
+            opacity=0.45,
+            showscale=False,
+            name="f(x1, x2) yuzeyi",
+            hoverinfo="skip",
+            contours=dict(
+                z=dict(show=True, usecolormap=True, highlightcolor="white", project_z=True),
+            ),
+        )
+    )
+
+    # ---- 2. Parcaciklar (yuzey uzerinde toplar) ----
+    p_z = np.clip(fitness, None, z_cap)
+    fig.add_trace(
+        go.Scatter3d(
+            x=positions[:, 0],
+            y=positions[:, 1],
+            z=p_z,
+            mode="markers",
+            marker=dict(
+                size=7,
+                color=fitness,
+                colorscale="Plasma",
+                cmin=float(np.min(fitness)),
+                cmax=float(np.percentile(fitness, 90)),
+                opacity=0.95,
+                line=dict(width=0.6, color="rgba(255,255,255,0.7)"),
+                colorbar=dict(title="f(x)", len=0.5, y=0.75),
+            ),
+            text=[
+                f"Parcacik {i}<br>x1={positions[i, 0]:.4f}<br>x2={positions[i, 1]:.4f}<br>f={fitness[i]:.6f}"
+                for i in range(len(positions))
+            ],
+            hovertemplate="%{text}<extra></extra>",
+            name="Parcaciklar (suru)",
+        )
+    )
+
+    # ---- 3. Hiz vektorleri (oklar) ----
+    vel_norms = np.linalg.norm(velocities, axis=1)
+    max_vel = float(np.max(vel_norms)) if float(np.max(vel_norms)) > 1e-9 else 1.0
+    arrow_scale = 0.12 * (ub[0] - lb[0])
+    vel_normalized = velocities / (max_vel + 1e-12) * arrow_scale
+
+    arrow_tips_x = positions[:, 0] + vel_normalized[:, 0]
+    arrow_tips_y = positions[:, 1] + vel_normalized[:, 1]
+    tip_z = np.array([
+        problem.objective(np.array([arrow_tips_x[i], arrow_tips_y[i]]))
+        for i in range(len(positions))
+    ])
+    tip_z = np.clip(tip_z, None, z_cap)
+
+    for i in range(len(positions)):
+        fig.add_trace(
+            go.Scatter3d(
+                x=[positions[i, 0], arrow_tips_x[i]],
+                y=[positions[i, 1], arrow_tips_y[i]],
+                z=[p_z[i], tip_z[i]],
+                mode="lines",
+                line=dict(width=3, color="rgba(255,165,0,0.7)"),
+                showlegend=i == 0,
+                name="Hiz vektoru" if i == 0 else "",
+                hoverinfo="skip",
+            )
+        )
+
+    # ---- 4. Personal best ----
+    pb_z = np.clip(pbest_fitness, None, z_cap)
+    fig.add_trace(
+        go.Scatter3d(
+            x=pbest_positions[:, 0],
+            y=pbest_positions[:, 1],
+            z=pb_z,
+            mode="markers",
+            marker=dict(
+                size=4,
+                color="rgba(0,200,255,0.5)",
+                symbol="diamond",
+                line=dict(width=0.3, color="rgba(0,150,200,0.6)"),
+            ),
+            text=[
+                f"pBest {i}<br>x1={pbest_positions[i, 0]:.4f}<br>x2={pbest_positions[i, 1]:.4f}<br>f={pbest_fitness[i]:.6f}"
+                for i in range(len(pbest_positions))
+            ],
+            hovertemplate="%{text}<extra></extra>",
+            name="Personal best (pBest)",
+        )
+    )
+
+    # ---- 5. Global best yolu (tarihce) ----
+    if len(gbest_history) > 1:
+        hist_arr = np.array(gbest_history)
+        hist_z = np.array([problem.objective(p) for p in hist_arr])
+        hist_z = np.clip(hist_z, None, z_cap)
+        fig.add_trace(
+            go.Scatter3d(
+                x=hist_arr[:, 0],
+                y=hist_arr[:, 1],
+                z=hist_z,
+                mode="lines+markers",
+                line=dict(width=5, color="rgba(239,68,68,0.65)"),
+                marker=dict(size=2, color="rgba(239,68,68,0.4)"),
+                name="Global best yolu",
+                hoverinfo="skip",
+            )
+        )
+
+    # ---- 6. Global best noktasi ----
+    gb_z = min(float(gbest_value), z_cap)
+    fig.add_trace(
+        go.Scatter3d(
+            x=[gbest_position[0]],
+            y=[gbest_position[1]],
+            z=[gb_z],
+            mode="markers+text",
+            marker=dict(
+                size=14, symbol="diamond", color="#ef4444",
+                line=dict(width=2, color="#ffffff"),
+            ),
+            text=[f"gBest f={gbest_value:.6f}"],
+            textposition="top center",
+            textfont=dict(size=11, color="#ef4444"),
+            hovertemplate=f"Global Best<br>x1={gbest_position[0]:.4f}<br>x2={gbest_position[1]:.4f}<br>f={gbest_value:.8f}<extra></extra>",
+            name="Global best (gBest)",
+        )
+    )
+
+    # ---- 7. Gercek global minimum ----
+    gm = problem.global_min
+    gm_z = min(float(problem.global_min_value), z_cap)
+    fig.add_trace(
+        go.Scatter3d(
+            x=[gm[0]], y=[gm[1]], z=[gm_z],
+            mode="markers+text",
+            marker=dict(size=12, symbol="cross", color="#22c55e", line=dict(width=2, color="#166534")),
+            text=[f"Gercek min ({gm[0]:.1f},{gm[1]:.1f})"],
+            textposition="bottom center",
+            textfont=dict(size=10, color="#166534"),
+            hovertemplate=f"Gercek global minimum<br>x1={gm[0]:.4f}<br>x2={gm[1]:.4f}<br>f={problem.global_min_value:.8f}<extra></extra>",
+            name="Gercek minimum",
+        )
+    )
+
+    # ---- Layout ----
+    dist_to_min = np.linalg.norm(gbest_position - problem.global_min)
+    fig.update_layout(
+        title=dict(
+            text=(
+                f"<b>PSO 3D Gorsellestime</b> | {problem.name} | Iterasyon {iteration}"
+                f"<br><span style='font-size:12px;color:#64748b'>"
+                f"gBest={gbest_value:.6f} | Min'e uzaklik={dist_to_min:.4f} | Parcacik={len(positions)}</span>"
+            ),
+            font=dict(size=15),
+        ),
+        height=620,
+        margin=dict(l=0, r=0, t=80, b=0),
+        scene=dict(
+            xaxis_title="x1",
+            yaxis_title="x2",
+            zaxis_title="f(x1, x2)",
+            bgcolor="rgba(15,23,42,0.03)",
+            camera=dict(eye=dict(x=1.6, y=1.6, z=1.0)),
+        ),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=-0.05, x=0.0,
+            font=dict(size=10),
+        ),
+    )
+    return fig
+
+
+def build_pso_contour_figure(
+    problem: PSOProblem,
+    positions: np.ndarray,
+    fitness: np.ndarray,
+    velocities: np.ndarray,
+    pbest_positions: np.ndarray,
+    gbest_position: np.ndarray,
+    gbest_value: float,
+    gbest_history: list[np.ndarray],
+    iteration: int,
+    grid_resolution: int = 100,
+) -> go.Figure:
+    """Kus bakisi 2D kontur haritasi + parcaciklar + hiz oklari."""
+    lb = problem.lower_bounds
+    ub = problem.upper_bounds
+
+    x_grid = np.linspace(lb[0], ub[0], grid_resolution)
+    y_grid = np.linspace(lb[1], ub[1], grid_resolution)
+    X, Y = np.meshgrid(x_grid, y_grid)
+    Z = np.zeros_like(X)
+    for i in range(grid_resolution):
+        for j in range(grid_resolution):
+            Z[i, j] = problem.objective(np.array([X[i, j], Y[i, j]]))
+
+    z_cap = np.percentile(Z, 95)
+    Z_capped = np.clip(Z, None, z_cap)
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Contour(
+            x=x_grid, y=y_grid, z=Z_capped,
+            colorscale="Viridis",
+            contours=dict(coloring="heatmap"),
+            showscale=True,
+            colorbar=dict(title="f(x)", len=0.8),
+            opacity=0.7,
+            name="Kontur",
+            hoverinfo="skip",
+        )
+    )
+
+    # Hiz oklari (quiver benzeri)
+    vel_norms = np.linalg.norm(velocities, axis=1)
+    max_vel = float(np.max(vel_norms)) if float(np.max(vel_norms)) > 1e-9 else 1.0
+    arrow_scale = 0.06 * (ub[0] - lb[0])
+
+    for i in range(len(positions)):
+        vn = vel_norms[i] / (max_vel + 1e-12)
+        dx = velocities[i, 0] / (max_vel + 1e-12) * arrow_scale
+        dy = velocities[i, 1] / (max_vel + 1e-12) * arrow_scale
+        fig.add_annotation(
+            x=positions[i, 0] + dx,
+            y=positions[i, 1] + dy,
+            ax=positions[i, 0],
+            ay=positions[i, 1],
+            xref="x", yref="y", axref="x", ayref="y",
+            showarrow=True,
+            arrowhead=3, arrowsize=1.2, arrowwidth=1.5,
+            arrowcolor=f"rgba(255,165,0,{0.3 + 0.7 * vn:.2f})",
+        )
+
+    # Personal best
+    fig.add_trace(
+        go.Scatter(
+            x=pbest_positions[:, 0], y=pbest_positions[:, 1],
+            mode="markers",
+            marker=dict(size=5, color="rgba(0,200,255,0.4)", symbol="diamond"),
+            name="pBest",
+        )
+    )
+
+    # Parcaciklar
+    fig.add_trace(
+        go.Scatter(
+            x=positions[:, 0], y=positions[:, 1],
+            mode="markers",
+            marker=dict(
+                size=10, color=fitness, colorscale="Plasma",
+                cmin=float(np.min(fitness)),
+                cmax=float(np.percentile(fitness, 90)),
+                line=dict(width=1, color="white"),
+            ),
+            text=[f"P{i} f={fitness[i]:.4f}" for i in range(len(positions))],
+            hovertemplate="%{text}<extra></extra>",
+            name="Parcaciklar",
+        )
+    )
+
+    # Global best tarihce
+    if len(gbest_history) > 1:
+        hist_arr = np.array(gbest_history)
+        fig.add_trace(
+            go.Scatter(
+                x=hist_arr[:, 0], y=hist_arr[:, 1],
+                mode="lines+markers",
+                line=dict(width=2.5, color="rgba(239,68,68,0.6)"),
+                marker=dict(size=3, color="rgba(239,68,68,0.4)"),
+                name="gBest yolu",
+            )
+        )
+
+    # Global best
+    fig.add_trace(
+        go.Scatter(
+            x=[gbest_position[0]], y=[gbest_position[1]],
+            mode="markers+text",
+            marker=dict(size=18, symbol="star", color="#ef4444", line=dict(width=2, color="white")),
+            text=[f"gBest"],
+            textposition="top right",
+            name="Global best",
+        )
+    )
+
+    # Gercek minimum
+    gm = problem.global_min
+    fig.add_trace(
+        go.Scatter(
+            x=[gm[0]], y=[gm[1]],
+            mode="markers+text",
+            marker=dict(size=16, symbol="x", color="#22c55e", line=dict(width=2, color="#166534")),
+            text=["Gercek min"],
+            textposition="bottom right",
+            name="Gercek minimum",
+        )
+    )
+
+    fig.update_layout(
+        title=f"Kus bakisi (kontur) | {problem.name} | Iterasyon {iteration}",
+        height=460,
+        margin=dict(l=0, r=0, t=55, b=0),
+        xaxis_title="x1", yaxis_title="x2",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0, font=dict(size=10)),
+    )
+    return fig
+
+
+def build_pso_progress_figure(best_hist: list[float], mean_hist: list[float]) -> go.Figure:
+    frame = pd.DataFrame(
+        {
+            "Iterasyon": np.arange(1, len(best_hist) + 1),
+            "Global best": best_hist,
+            "Suru ortalamasi": mean_hist,
+        }
+    )
+    fig = px.line(
+        frame,
+        x="Iterasyon",
+        y=["Global best", "Suru ortalamasi"],
+        labels={"value": "Maliyet", "variable": "Olcum"},
+    )
+    fig.update_layout(height=290, margin=dict(l=0, r=0, t=35, b=0), legend_title_text="")
+    return fig
+
+
+def build_pso_dynamics_figure(velocity_hist: list[float], diversity_hist: list[float]) -> go.Figure:
+    steps = np.arange(1, len(velocity_hist) + 1)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=steps,
+            y=velocity_hist,
+            mode="lines",
+            name="Ortalama hiz normu",
+            yaxis="y1",
+            line=dict(color="#f59e0b"),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=steps,
+            y=diversity_hist,
+            mode="lines",
+            name="Suru cesitliligi",
+            yaxis="y2",
+            line=dict(color="#06b6d4"),
+        )
+    )
+    fig.update_layout(
+        height=290,
+        margin=dict(l=0, r=0, t=35, b=0),
+        yaxis=dict(title="Hiz"),
+        yaxis2=dict(title="Cesitlilik", overlaying="y", side="right"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0),
+    )
+    return fig
+
+
+def build_pso_live_info_text(
+    iteration: int,
+    config: PSOConfig,
+    problem: PSOProblem,
+    best_value: float,
+    current_mean: float,
+    first_best: float,
+    improved_counter: int,
+    best_position: np.ndarray,
+    velocity_norm: float,
+    diversity: float,
+) -> str:
+    improvement = ((first_best - best_value) / max(abs(first_best), 1e-12)) * 100 if iteration > 1 else 0.0
+    dist_to_min = float(np.linalg.norm(best_position - problem.global_min))
+    preview = ", ".join([f"{v:.6f}" for v in best_position])
+
+    lines = [
+        "=" * 40,
+        f"  ITERASYON: {iteration} / {config.iterations}",
+        "=" * 40,
+        "",
+        f"Problem: {problem.name}",
+        f"Boyut: 2 (x1, x2)",
+        "",
+        "--- SONUCLAR ---",
+        f"Global best (gBest) : {best_value:.8f}",
+        f"Suru ortalamasi     : {current_mean:.8f}",
+        f"Iyilesme            : %{improvement:.3f}",
+        f"Min'e uzaklik       : {dist_to_min:.6f}",
+        "",
+        "--- SURU DINAMIKLERI ---",
+        f"Iyilesen parcacik   : {improved_counter} / {config.swarm_size}",
+        f"Ort. hiz normu      : {velocity_norm:.6f}",
+        f"Suru cesitliligi    : {diversity:.6f}",
+        "",
+        "--- EN IYI POZISYON ---",
+        f"x = [{preview}]",
+        "",
+        "--- PSO PARAMETRELERI ---",
+        f"w  (inertia)    = {config.inertia_weight:.2f}",
+        f"c1 (cognitive)  = {config.cognitive_coeff:.2f}",
+        f"c2 (social)     = {config.social_coeff:.2f}",
+        f"Hiz siniri oran = {config.velocity_clamp_ratio:.2f}",
+        "",
+        "--- PSO FORMULU ---",
+        "v = w*v + c1*r1*(pBest-x) + c2*r2*(gBest-x)",
+        "x = x + v",
+        "",
+        "Not:",
+        problem.description,
+    ]
+    return "\n".join(lines)
+
+
+def configure_sidebar() -> tuple[str, GAConfig | SAConfig | ACOConfig | PSOConfig, bool, bool]:
     run_button = st.sidebar.button("Calistir", type="primary", use_container_width=True)
     clear_button = st.sidebar.button("Oturumu sifirla", use_container_width=True)
     st.sidebar.divider()
-    st.sidebar.header("Genetik Algoritma Parametreleri")
-    population_size = st.sidebar.slider("Populasyon", 40, 500, 180, step=10)
-    generations_slider = st.sidebar.slider("Nesil sayisi (slider)", 50, 5000, 4000, step=25)
-    generations_manual = st.sidebar.number_input(
-        "Nesil sayisi (manuel)",
-        min_value=50,
-        max_value=200000,
-        value=int(generations_slider),
-        step=50,
+    algorithm = st.sidebar.selectbox(
+        "Algoritma secimi",
+        [
+            "Genetik Algoritma",
+            "Tavlama Algoritmasi",
+            "Karinca Kolonisi Algoritmasi",
+            PSO_ALGORITHM_NAME,
+        ],
+        index=0,
     )
-    generations = int(generations_manual)
-    crossover_rate = st.sidebar.slider("Crossover olasiligi", 0.0, 1.0, 0.92, step=0.01)
-    mutation_rate = st.sidebar.slider("Mutasyon olasiligi", 0.0, 0.35, 0.08, step=0.01)
-    max_elitism = max(2, population_size // 5)
-    elitism = st.sidebar.slider("Elit birey", 1, max_elitism, min(8, max_elitism))
-    selection_method = st.sidebar.selectbox("Secim yontemi", ["Turnuva", "Rulet"])
-    tournament_size = st.sidebar.slider("Turnuva boyutu", 2, 10, 4)
-    crossover_method = st.sidebar.selectbox("Crossover tipi", ["OX", "PMX"])
-    mutation_operator = st.sidebar.selectbox("Mutasyon tipi", ["Swap", "Inversion", "Scramble"])
-    st.sidebar.markdown("### Canli Akis Ayarlari")
-    route_update_every = st.sidebar.slider("Rota guncelleme (nesilde bir)", 1, 10, 1)
-    analytics_update_every = st.sidebar.slider("Grafik guncelleme (nesilde bir)", 1, 20, 3)
-    heatmap_update_every = st.sidebar.slider("Heatmap guncelleme (nesilde bir)", 1, 50, 8)
-    frame_delay = st.sidebar.slider("Kare gecikmesi (sn)", 0.0, 0.30, 0.05, step=0.01)
-    random_seed = st.sidebar.number_input("Rastgele tohum", min_value=0, max_value=999999, value=42)
 
-    return (
-        GAConfig(
+    if algorithm == "Genetik Algoritma":
+        st.sidebar.header("Genetik Algoritma Parametreleri")
+        population_size = st.sidebar.slider("Populasyon", 40, 500, 180, step=10)
+        generations_slider = st.sidebar.slider("Nesil sayisi (slider)", 50, 5000, 4000, step=25)
+        generations_manual = st.sidebar.number_input(
+            "Nesil sayisi (manuel)",
+            min_value=50,
+            max_value=200000,
+            value=int(generations_slider),
+            step=50,
+        )
+        generations = int(generations_manual)
+        crossover_rate = st.sidebar.slider("Crossover olasiligi", 0.0, 1.0, 0.92, step=0.01)
+        mutation_rate = st.sidebar.slider("Mutasyon olasiligi", 0.0, 0.35, 0.08, step=0.01)
+        max_elitism = max(2, population_size // 5)
+        elitism = st.sidebar.slider("Elit birey", 1, max_elitism, min(8, max_elitism))
+        selection_method = st.sidebar.selectbox("Secim yontemi", ["Turnuva", "Rulet"])
+        tournament_size = st.sidebar.slider("Turnuva boyutu", 2, 10, 4)
+        crossover_method = st.sidebar.selectbox("Crossover tipi", ["OX", "PMX"])
+        mutation_operator = st.sidebar.selectbox("Mutasyon tipi", ["Swap", "Inversion", "Scramble"])
+        with st.sidebar.expander("Canli Akis Ayarlari", expanded=True):
+            route_update_every = st.slider("Rota guncelleme (nesilde bir)", 1, 10, 1)
+            analytics_update_every = st.slider("Grafik guncelleme (nesilde bir)", 1, 20, 3)
+            heatmap_update_every = st.slider("Heatmap guncelleme (nesilde bir)", 1, 50, 8)
+            frame_delay = st.slider("Kare gecikmesi (sn)", 0.0, 0.30, 0.05, step=0.01)
+        random_seed = st.sidebar.number_input(
+            "Rastgele tohum", min_value=0, max_value=999999, value=42, key="ga_seed"
+        )
+
+        config: GAConfig | SAConfig | ACOConfig | PSOConfig = GAConfig(
             population_size=population_size,
             generations=generations,
             crossover_rate=crossover_rate,
@@ -500,10 +1880,155 @@ def configure_sidebar() -> tuple[GAConfig, bool, bool]:
             heatmap_update_every=heatmap_update_every,
             frame_delay=frame_delay,
             random_seed=int(random_seed),
-        ),
-        run_button,
-        clear_button,
-    )
+        )
+    elif algorithm == "Tavlama Algoritmasi":
+        st.sidebar.header("Tavlama Algoritmasi Parametreleri")
+        iterations_slider = st.sidebar.slider(
+            "Iterasyon sayisi (slider)", 2000, 120000, 35000, step=500
+        )
+        iterations_manual = st.sidebar.number_input(
+            "Iterasyon sayisi (manuel)",
+            min_value=2000,
+            max_value=1000000,
+            value=int(iterations_slider),
+            step=500,
+        )
+        iterations = int(iterations_manual)
+        initial_temperature = st.sidebar.slider(
+            "Baslangic sicakligi", 100.0, 10000.0, 3500.0, step=50.0
+        )
+        cooling_rate = st.sidebar.slider("Soguma orani", 0.9500, 0.99995, 0.9996, step=0.00005)
+        min_temperature = st.sidebar.slider("Minimum sicaklik", 0.00001, 5.0, 0.0005, step=0.00001)
+        neighbor_operator = st.sidebar.selectbox(
+            "Komsu uretim tipi",
+            ["2-Opt + Swap (onerilen)", "2-Opt", "Swap", "Inversion", "Scramble"],
+        )
+        two_opt_every = st.sidebar.slider(
+            "2-Opt yerel iyilestirme araligi (0=kapali)", 0, 2000, 125, step=25
+        )
+        stagnation_limit = st.sidebar.slider("Stagnasyon limiti", 500, 20000, 3500, step=100)
+        reheat_ratio = st.sidebar.slider("Reheat katsayisi", 0.10, 1.00, 0.35, step=0.05)
+        with st.sidebar.expander("Canli Akis Ayarlari", expanded=True):
+            route_update_every = st.slider("Rota guncelleme (iterasyonda bir)", 1, 500, 100)
+            analytics_update_every = st.slider(
+                "Grafik guncelleme (iterasyonda bir)", 1, 1000, 150
+            )
+            moves_update_every = st.slider("Hamle grafigi guncelleme", 1, 1000, 150)
+            frame_delay = st.slider("Kare gecikmesi (sn)", 0.0, 0.30, 0.00, step=0.01)
+        random_seed = st.sidebar.number_input(
+            "Rastgele tohum", min_value=0, max_value=999999, value=42, key="sa_seed"
+        )
+
+        config = SAConfig(
+            iterations=iterations,
+            initial_temperature=initial_temperature,
+            cooling_rate=cooling_rate,
+            min_temperature=min_temperature,
+            neighbor_operator=neighbor_operator,
+            two_opt_every=two_opt_every,
+            stagnation_limit=stagnation_limit,
+            reheat_ratio=reheat_ratio,
+            route_update_every=route_update_every,
+            analytics_update_every=analytics_update_every,
+            moves_update_every=moves_update_every,
+            frame_delay=frame_delay,
+            random_seed=int(random_seed),
+        )
+    elif algorithm == "Karinca Kolonisi Algoritmasi":
+        st.sidebar.header("Karinca Kolonisi Parametreleri")
+        ant_count = st.sidebar.slider("Karinca sayisi", 20, 240, 90, step=5)
+        iterations_slider = st.sidebar.slider(
+            "Iterasyon sayisi (slider)", 50, 3000, 700, step=25, key="aco_iterations_slider"
+        )
+        iterations_manual = st.sidebar.number_input(
+            "Iterasyon sayisi (manuel)",
+            min_value=50,
+            max_value=100000,
+            value=int(iterations_slider),
+            step=25,
+            key="aco_iterations_manual",
+        )
+        iterations = int(iterations_manual)
+        alpha = st.sidebar.slider("Feromon agirligi (alpha)", 0.5, 5.0, 1.2, step=0.1)
+        beta = st.sidebar.slider("Sezgisel agirlik (beta)", 1.0, 8.0, 4.8, step=0.1)
+        evaporation_rate = st.sidebar.slider("Buharlasma orani", 0.05, 0.90, 0.35, step=0.01)
+        pheromone_constant = st.sidebar.slider("Feromon sabiti (Q)", 100.0, 20000.0, 4000.0, step=100.0)
+        elitist_weight = st.sidebar.slider("Elitist takviye", 0, 10, 2)
+        candidate_k = st.sidebar.slider("Aday komsu siniri (0=sinirsiz)", 0, 50, 18)
+        two_opt_every = st.sidebar.slider("2-Opt periyodu (0=kapali)", 0, 250, 25, step=5)
+        with st.sidebar.expander("Canli Akis Ayarlari", expanded=True):
+            route_update_every = st.slider("Rota guncelleme (iterasyonda bir)", 1, 100, 10)
+            analytics_update_every = st.slider("Grafik guncelleme (iterasyonda bir)", 1, 200, 20)
+            ants_update_every = st.slider("Karinca grafigi guncelleme", 1, 200, 20)
+            frame_delay = st.slider("Kare gecikmesi (sn)", 0.0, 0.30, 0.00, step=0.01)
+        random_seed = st.sidebar.number_input(
+            "Rastgele tohum", min_value=0, max_value=999999, value=42, key="aco_seed"
+        )
+
+        config = ACOConfig(
+            ant_count=ant_count,
+            iterations=iterations,
+            alpha=alpha,
+            beta=beta,
+            evaporation_rate=evaporation_rate,
+            pheromone_constant=pheromone_constant,
+            elitist_weight=elitist_weight,
+            candidate_k=candidate_k,
+            two_opt_every=two_opt_every,
+            route_update_every=route_update_every,
+            analytics_update_every=analytics_update_every,
+            ants_update_every=ants_update_every,
+            frame_delay=frame_delay,
+            random_seed=int(random_seed),
+        )
+    else:
+        st.sidebar.header("PSO Parametreleri")
+        problem_name = st.sidebar.selectbox("Benchmark fonksiyon", PSO_PROBLEM_LABELS, index=0)
+        st.sidebar.caption("Tum problemler 2D (x1, x2) olarak calisir ve 3D yuzey uzerinde gorsellestirilir.")
+
+        swarm_size = st.sidebar.slider("Suru parcacik sayisi", 10, 200, 40, step=5)
+        iterations_slider = st.sidebar.slider(
+            "Iterasyon sayisi (slider)", 10, 2000, 300, step=10, key="pso_iterations_slider"
+        )
+        iterations_manual = st.sidebar.number_input(
+            "Iterasyon sayisi (manuel)",
+            min_value=10,
+            max_value=50000,
+            value=int(iterations_slider),
+            step=10,
+            key="pso_iterations_manual",
+        )
+        iterations = int(iterations_manual)
+        st.sidebar.subheader("PSO Katsayilari")
+        st.sidebar.caption("v = **w**·v + **c1**·r1·(pBest-x) + **c2**·r2·(gBest-x)")
+        inertia_weight = st.sidebar.slider("Inertia (w)", 0.10, 0.99, 0.72, step=0.01)
+        cognitive_coeff = st.sidebar.slider("Cognitive (c1)", 0.0, 4.0, 1.70, step=0.05)
+        social_coeff = st.sidebar.slider("Social (c2)", 0.0, 4.0, 1.70, step=0.05)
+        velocity_clamp_ratio = st.sidebar.slider(
+            "Hiz siniri orani (vmax/range)", 0.01, 1.00, 0.25, step=0.01
+        )
+        with st.sidebar.expander("Canli Akis Ayarlari", expanded=True):
+            route_update_every = st.slider("3D guncelleme (iterasyonda bir)", 1, 50, 5)
+            analytics_update_every = st.slider("Grafik guncelleme (iterasyonda bir)", 1, 100, 10)
+            frame_delay = st.slider("Kare gecikmesi (sn)", 0.0, 1.00, 0.10, step=0.01)
+        random_seed = st.sidebar.number_input(
+            "Rastgele tohum", min_value=0, max_value=999999, value=42, key="pso_seed"
+        )
+        config = PSOConfig(
+            problem_name=problem_name,
+            swarm_size=swarm_size,
+            iterations=iterations,
+            inertia_weight=inertia_weight,
+            cognitive_coeff=cognitive_coeff,
+            social_coeff=social_coeff,
+            velocity_clamp_ratio=velocity_clamp_ratio,
+            route_update_every=route_update_every,
+            analytics_update_every=analytics_update_every,
+            frame_delay=frame_delay,
+            random_seed=int(random_seed),
+        )
+
+    return algorithm, config, run_button, clear_button
 
 
 def run_genetic_algorithm(cities: pd.DataFrame, config: GAConfig) -> dict:
@@ -664,6 +2189,7 @@ def run_genetic_algorithm(cities: pd.DataFrame, config: GAConfig) -> dict:
 
     final_route = np.concatenate(([start_idx], best_chromosome, [start_idx]))
     return {
+        "algorithm": "Genetik Algoritma",
         "best_distance": best_distance,
         "best_route": final_route,
         "history_best": best_hist,
@@ -676,15 +2202,665 @@ def run_genetic_algorithm(cities: pd.DataFrame, config: GAConfig) -> dict:
     }
 
 
+def run_simulated_annealing(cities: pd.DataFrame, config: SAConfig) -> dict:
+    idx_izmir = cities.index[cities["city_key"] == "IZMIR"].tolist()
+    if not idx_izmir:
+        raise ValueError("Veri setinde IZMIR bulunamadi.")
+    start_idx = int(idx_izmir[0])
+
+    distance_matrix = build_distance_matrix(cities["lat"].to_numpy(), cities["lon"].to_numpy())
+    available_cities = np.array([i for i in range(len(cities)) if i != start_idx], dtype=np.int16)
+    rng = np.random.default_rng(config.random_seed)
+
+    current_chromosome = rng.permutation(available_cities).astype(np.int16)
+    current_distance = route_distance(current_chromosome, start_idx, distance_matrix)
+    best_chromosome = current_chromosome.copy()
+    best_distance = current_distance
+
+    best_hist: list[float] = []
+    current_hist: list[float] = []
+    temperature_hist: list[float] = []
+    acceptance_hist: list[float] = []
+    move_events: deque = deque(maxlen=36)
+    accepted_counter = 0
+    worse_accepted_counter = 0
+    local_search_counter = 0
+    reheat_counter = 0
+    stagnation_counter = 0
+    temperature = config.initial_temperature
+
+    progress = st.progress(0.0)
+    left_col, right_col = st.columns([3.4, 1.6], gap="medium")
+    with left_col:
+        route_ph = st.empty()
+        line_left, line_right = st.columns(2)
+        progress_ph = line_left.empty()
+        temperature_ph = line_right.empty()
+        moves_ph = st.empty()
+    with right_col:
+        st.caption("Canli metin paneli (sabit kutu, kaydirarak incele)")
+        info_ph = st.empty()
+
+    for iteration in range(1, config.iterations + 1):
+        previous_distance = current_distance
+        candidate, candidate_distance, event = propose_sa_neighbor(
+            current_chromosome,
+            current_distance,
+            operator=config.neighbor_operator,
+            start_idx=start_idx,
+            distance_matrix=distance_matrix,
+            rng=rng,
+        )
+        delta = candidate_distance - previous_distance
+
+        accepted = False
+        accepted_worse = False
+        if delta <= 0:
+            accepted = True
+        else:
+            threshold = np.exp(-delta / max(temperature, 1e-12))
+            if rng.random() < threshold:
+                accepted = True
+                accepted_worse = True
+
+        if accepted:
+            current_chromosome = candidate
+            current_distance = candidate_distance
+            accepted_counter += 1
+            if accepted_worse:
+                worse_accepted_counter += 1
+
+        if config.two_opt_every > 0 and iteration % config.two_opt_every == 0:
+            before_local_search = current_distance
+            improved_route, improved_distance, best_pair = best_two_opt_improvement(
+                current_chromosome, current_distance, start_idx, distance_matrix
+            )
+            if best_pair is not None and improved_distance + 1e-9 < current_distance:
+                local_search_counter += 1
+                current_chromosome = improved_route
+                current_distance = improved_distance
+                move_events.append(
+                    {
+                        "iteration": iteration,
+                        "operator": "2-Opt Yerel",
+                        "positions": f"{best_pair[0]}-{best_pair[1]}",
+                        "before": [],
+                        "after": [],
+                        "delta_km": current_distance - before_local_search,
+                        "temperature": temperature,
+                        "accepted": True,
+                        "accepted_worse": False,
+                    }
+                )
+
+        if current_distance + 1e-9 < best_distance:
+            best_distance = current_distance
+            best_chromosome = current_chromosome.copy()
+            stagnation_counter = 0
+        else:
+            stagnation_counter += 1
+
+        event["iteration"] = iteration
+        event["delta_km"] = delta
+        event["temperature"] = temperature
+        event["accepted"] = accepted
+        event["accepted_worse"] = accepted_worse
+        if "before" not in event:
+            event["before"] = []
+        if "after" not in event:
+            event["after"] = []
+        if "operator" not in event:
+            event["operator"] = config.neighbor_operator
+        if "positions" not in event:
+            event["positions"] = "-"
+        move_events.append(event)
+
+        if config.stagnation_limit > 0 and stagnation_counter >= config.stagnation_limit:
+            reheat_counter += 1
+            before_kick = current_distance
+            current_chromosome = best_chromosome.copy()
+            kick_moves = max(3, len(current_chromosome) // 10)
+            for _ in range(kick_moves):
+                i, j = sorted(rng.choice(len(current_chromosome), size=2, replace=False))
+                current_chromosome[i], current_chromosome[j] = current_chromosome[j], current_chromosome[i]
+
+            current_distance = route_distance(current_chromosome, start_idx, distance_matrix)
+            temperature = max(temperature, config.initial_temperature * config.reheat_ratio)
+            stagnation_counter = 0
+            move_events.append(
+                {
+                    "iteration": iteration,
+                    "operator": "Reheat-Kick",
+                    "positions": f"{kick_moves} hamle",
+                    "before": [],
+                    "after": [],
+                    "delta_km": current_distance - before_kick,
+                    "temperature": temperature,
+                    "accepted": True,
+                    "accepted_worse": current_distance > before_kick,
+                }
+            )
+
+        best_hist.append(best_distance)
+        current_hist.append(current_distance)
+        temperature_hist.append(temperature)
+        acceptance_hist.append(accepted_counter / iteration)
+
+        route_due = (
+            iteration == 1
+            or iteration == config.iterations
+            or iteration % config.route_update_every == 0
+        )
+        analytics_due = (
+            iteration == 1
+            or iteration == config.iterations
+            or iteration % config.analytics_update_every == 0
+        )
+        moves_due = (
+            iteration == 1
+            or iteration == config.iterations
+            or iteration % config.moves_update_every == 0
+        )
+
+        if route_due:
+            best_route = np.concatenate(([start_idx], best_chromosome, [start_idx]))
+            route_fig = build_route_figure(
+                best_route,
+                cities,
+                iteration,
+                best_distance,
+                step_label="Iterasyon",
+            )
+            route_ph.plotly_chart(
+                route_fig,
+                use_container_width=True,
+                key=f"route_sa_live_{iteration}",
+            )
+            info_text = build_sa_live_info_text(
+                iteration=iteration,
+                config=config,
+                temperature=temperature,
+                best_distance=best_distance,
+                current_distance=current_distance,
+                first_best=best_hist[0],
+                accepted_counter=accepted_counter,
+                worse_accepted_counter=worse_accepted_counter,
+                local_search_counter=local_search_counter,
+                reheat_counter=reheat_counter,
+                stagnation_counter=stagnation_counter,
+                best_route=best_route,
+                move_events=move_events,
+                cities=cities,
+            )
+            info_ph.text_area(
+                "Canli bilgi paneli",
+                value=info_text,
+                height=780,
+                disabled=True,
+                label_visibility="collapsed",
+            )
+            progress.progress(iteration / config.iterations)
+            if config.frame_delay > 0:
+                time.sleep(config.frame_delay)
+
+        if analytics_due:
+            progress_ph.plotly_chart(
+                build_sa_progress_figure(best_hist, current_hist),
+                use_container_width=True,
+                key=f"fitness_sa_live_{iteration}",
+            )
+            temperature_ph.plotly_chart(
+                build_sa_temperature_figure(temperature_hist, acceptance_hist),
+                use_container_width=True,
+                key=f"temperature_sa_live_{iteration}",
+            )
+
+        if moves_due:
+            moves_ph.plotly_chart(
+                build_sa_moves_figure(move_events),
+                use_container_width=True,
+                key=f"moves_sa_live_{iteration}",
+            )
+
+        temperature = max(config.min_temperature, temperature * config.cooling_rate)
+
+    final_route = np.concatenate(([start_idx], best_chromosome, [start_idx]))
+    return {
+        "algorithm": "Tavlama Algoritmasi",
+        "best_distance": best_distance,
+        "best_route": final_route,
+        "history_best": best_hist,
+        "history_current": current_hist,
+        "history_temperature": temperature_hist,
+        "history_acceptance": acceptance_hist,
+        "accepted_moves": accepted_counter,
+        "worse_accepted_moves": worse_accepted_counter,
+        "local_search_hits": local_search_counter,
+        "reheat_count": reheat_counter,
+        "completed_iterations": config.iterations,
+    }
+
+
+def run_ant_colony(cities: pd.DataFrame, config: ACOConfig) -> dict:
+    idx_izmir = cities.index[cities["city_key"] == "IZMIR"].tolist()
+    if not idx_izmir:
+        raise ValueError("Veri setinde IZMIR bulunamadi.")
+    start_idx = int(idx_izmir[0])
+
+    distance_matrix = build_distance_matrix(cities["lat"].to_numpy(), cities["lon"].to_numpy())
+    heuristic = 1.0 / (distance_matrix + 1e-9)
+    np.fill_diagonal(heuristic, 0.0)
+    pheromone = np.full(distance_matrix.shape, 1.0, dtype=np.float64)
+    np.fill_diagonal(pheromone, 0.0)
+
+    nearest_neighbors: list[np.ndarray] = []
+    for city_idx in range(len(cities)):
+        order = np.argsort(distance_matrix[city_idx])
+        nearest_neighbors.append(order[order != city_idx].astype(np.int16))
+
+    available_cities = np.array([i for i in range(len(cities)) if i != start_idx], dtype=np.int16)
+    rng = np.random.default_rng(config.random_seed)
+
+    best_chromosome = rng.permutation(available_cities).astype(np.int16)
+    best_distance = route_distance(best_chromosome, start_idx, distance_matrix)
+    local_search_counter = 0
+
+    best_hist: list[float] = []
+    iteration_best_hist: list[float] = []
+    pheromone_mean_hist: list[float] = []
+    pheromone_max_hist: list[float] = []
+    iteration_events: deque = deque(maxlen=20)
+    last_ant_distances = np.array([], dtype=np.float64)
+
+    progress = st.progress(0.0)
+    left_col, right_col = st.columns([3.4, 1.6], gap="medium")
+    with left_col:
+        route_ph = st.empty()
+        hyperspace_ph = st.empty()
+        line_left, line_right = st.columns(2)
+        progress_ph = line_left.empty()
+        pheromone_ph = line_right.empty()
+        ants_ph = st.empty()
+    with right_col:
+        st.caption("Canli metin paneli (sabit kutu, kaydirarak incele)")
+        info_ph = st.empty()
+
+    for iteration in range(1, config.iterations + 1):
+        ant_routes: list[np.ndarray] = []
+        ant_distances = np.empty(config.ant_count, dtype=np.float64)
+
+        for ant_idx in range(config.ant_count):
+            route = construct_aco_route(
+                start_idx=start_idx,
+                available_cities=available_cities,
+                pheromone=pheromone,
+                heuristic=heuristic,
+                alpha=config.alpha,
+                beta=config.beta,
+                candidate_k=config.candidate_k,
+                nearest_neighbors=nearest_neighbors,
+                rng=rng,
+            )
+            ant_routes.append(route)
+            ant_distances[ant_idx] = route_distance(route, start_idx, distance_matrix)
+
+        order = np.argsort(ant_distances)
+        best_ant_idx = int(order[0])
+        iteration_best_route = ant_routes[best_ant_idx]
+        iteration_best_distance = float(ant_distances[best_ant_idx])
+
+        local_search_used = False
+        if config.two_opt_every > 0 and iteration % config.two_opt_every == 0:
+            improved_route, improved_distance, pair = best_two_opt_improvement(
+                iteration_best_route, iteration_best_distance, start_idx, distance_matrix
+            )
+            if pair is not None and improved_distance + 1e-9 < iteration_best_distance:
+                local_search_counter += 1
+                local_search_used = True
+                iteration_best_route = improved_route
+                iteration_best_distance = improved_distance
+                ant_routes[best_ant_idx] = improved_route
+                ant_distances[best_ant_idx] = improved_distance
+
+        if iteration_best_distance + 1e-9 < best_distance:
+            best_distance = iteration_best_distance
+            best_chromosome = iteration_best_route.copy()
+
+        pheromone *= 1.0 - config.evaporation_rate
+        deposit_count = max(5, config.ant_count // 2)
+        for ant_id in order[:deposit_count]:
+            ant_distance = float(ant_distances[int(ant_id)])
+            if ant_distance <= 0:
+                continue
+            delta = config.pheromone_constant / ant_distance
+            add_pheromone_for_route(
+                pheromone=pheromone,
+                route=ant_routes[int(ant_id)],
+                start_idx=start_idx,
+                delta_pheromone=delta,
+            )
+
+        if config.elitist_weight > 0 and best_distance > 0:
+            elite_delta = config.elitist_weight * (config.pheromone_constant / best_distance)
+            add_pheromone_for_route(
+                pheromone=pheromone,
+                route=best_chromosome,
+                start_idx=start_idx,
+                delta_pheromone=elite_delta,
+            )
+
+        np.fill_diagonal(pheromone, 0.0)
+        tau_max = max(1.0, (config.pheromone_constant / max(best_distance, 1.0)) * 20.0)
+        np.clip(pheromone, 1e-8, tau_max, out=pheromone)
+
+        upper = pheromone[np.triu_indices_from(pheromone, k=1)]
+        pheromone_mean = float(np.mean(upper))
+        pheromone_max = float(np.max(upper))
+
+        best_hist.append(best_distance)
+        iteration_best_hist.append(iteration_best_distance)
+        pheromone_mean_hist.append(pheromone_mean)
+        pheromone_max_hist.append(pheromone_max)
+        last_ant_distances = ant_distances[order]
+        iteration_events.append(
+            {
+                "iteration": iteration,
+                "iteration_best": iteration_best_distance,
+                "global_best": best_distance,
+                "pheromone_mean": pheromone_mean,
+                "pheromone_max": pheromone_max,
+                "local_search": local_search_used,
+            }
+        )
+
+        route_due = (
+            iteration == 1
+            or iteration == config.iterations
+            or iteration % config.route_update_every == 0
+        )
+        analytics_due = (
+            iteration == 1
+            or iteration == config.iterations
+            or iteration % config.analytics_update_every == 0
+        )
+        ants_due = (
+            iteration == 1
+            or iteration == config.iterations
+            or iteration % config.ants_update_every == 0
+        )
+
+        if route_due:
+            best_route = np.concatenate(([start_idx], best_chromosome, [start_idx]))
+            route_fig = build_aco_swarm_figure(
+                cities,
+                start_idx=start_idx,
+                best_route_idx=best_route,
+                pheromone=pheromone,
+                ant_routes=ant_routes,
+                ant_distances=ant_distances,
+                iteration=iteration,
+                best_distance=best_distance,
+            )
+            route_ph.plotly_chart(
+                route_fig,
+                use_container_width=True,
+                key=f"route_aco_live_{iteration}",
+            )
+            hyperspace_ph.plotly_chart(
+                build_aco_hyperspace_figure(
+                    cities=cities,
+                    start_idx=start_idx,
+                    best_route_idx=best_route,
+                    pheromone=pheromone,
+                    ant_routes=ant_routes,
+                    ant_distances=ant_distances,
+                    iteration=iteration,
+                    best_distance=best_distance,
+                ),
+                use_container_width=True,
+                key=f"route_aco_hyper_live_{iteration}",
+            )
+            info_text = build_aco_live_info_text(
+                iteration=iteration,
+                config=config,
+                best_distance=best_distance,
+                iteration_best_distance=iteration_best_distance,
+                first_best=best_hist[0],
+                pheromone_mean=pheromone_mean,
+                pheromone_max=pheromone_max,
+                local_search_counter=local_search_counter,
+                best_route=best_route,
+                iteration_events=iteration_events,
+                cities=cities,
+            )
+            info_ph.text_area(
+                "Canli bilgi paneli",
+                value=info_text,
+                height=780,
+                disabled=True,
+                label_visibility="collapsed",
+            )
+            progress.progress(iteration / config.iterations)
+            if config.frame_delay > 0:
+                time.sleep(config.frame_delay)
+
+        if analytics_due:
+            progress_ph.plotly_chart(
+                build_aco_progress_figure(best_hist, iteration_best_hist),
+                use_container_width=True,
+                key=f"progress_aco_live_{iteration}",
+            )
+            pheromone_ph.plotly_chart(
+                build_aco_pheromone_figure(pheromone_mean_hist, pheromone_max_hist),
+                use_container_width=True,
+                key=f"pheromone_aco_live_{iteration}",
+            )
+
+        if ants_due:
+            ants_ph.plotly_chart(
+                build_aco_ant_distance_figure(last_ant_distances),
+                use_container_width=True,
+                key=f"ants_aco_live_{iteration}",
+            )
+
+    final_route = np.concatenate(([start_idx], best_chromosome, [start_idx]))
+    return {
+        "algorithm": "Karinca Kolonisi Algoritmasi",
+        "best_distance": best_distance,
+        "best_route": final_route,
+        "history_best": best_hist,
+        "history_iteration_best": iteration_best_hist,
+        "history_pheromone_mean": pheromone_mean_hist,
+        "history_pheromone_max": pheromone_max_hist,
+        "local_search_hits": local_search_counter,
+        "ant_count": config.ant_count,
+        "evaporation_rate": config.evaporation_rate,
+        "completed_iterations": config.iterations,
+    }
+
+
+def run_particle_swarm(config: PSOConfig) -> dict:
+    problem = build_pso_problem(config.problem_name)
+    rng = np.random.default_rng(config.random_seed)
+
+    lb = problem.lower_bounds.astype(np.float64)
+    ub = problem.upper_bounds.astype(np.float64)
+    dim = 2
+
+    positions = rng.uniform(lb, ub, size=(config.swarm_size, dim))
+    range_span = np.maximum(ub - lb, 1e-9)
+    vmax = config.velocity_clamp_ratio * range_span
+    velocities = rng.uniform(-vmax, vmax, size=(config.swarm_size, dim))
+
+    fitness = np.asarray([problem.objective(pos) for pos in positions], dtype=np.float64)
+    personal_best_positions = positions.copy()
+    personal_best_fitness = fitness.copy()
+
+    best_idx = int(np.argmin(fitness))
+    global_best_position = positions[best_idx].copy()
+    global_best_value = float(fitness[best_idx])
+    improved_counter = 0
+    gbest_history: list[np.ndarray] = [global_best_position.copy()]
+
+    best_hist: list[float] = []
+    mean_hist: list[float] = []
+    velocity_hist: list[float] = []
+    diversity_hist: list[float] = []
+
+    progress = st.progress(0.0)
+    left_col, right_col = st.columns([3.4, 1.6], gap="medium")
+    with left_col:
+        surface_ph = st.empty()
+        contour_ph = st.empty()
+        line_left, line_right = st.columns(2)
+        progress_ph = line_left.empty()
+        dynamics_ph = line_right.empty()
+    with right_col:
+        st.caption("Canli bilgi paneli")
+        info_ph = st.empty()
+
+    for iteration in range(1, config.iterations + 1):
+        r1 = rng.random((config.swarm_size, dim))
+        r2 = rng.random((config.swarm_size, dim))
+
+        cognitive = config.cognitive_coeff * r1 * (personal_best_positions - positions)
+        social = config.social_coeff * r2 * (global_best_position - positions)
+        velocities = config.inertia_weight * velocities + cognitive + social
+        velocities = np.clip(velocities, -vmax, vmax)
+
+        positions = positions + velocities
+        out_low = positions < lb
+        out_high = positions > ub
+        out_mask = out_low | out_high
+        velocities[out_mask] *= -0.5
+        positions = np.clip(positions, lb, ub)
+
+        fitness = np.asarray([problem.objective(pos) for pos in positions], dtype=np.float64)
+        improved_mask = fitness < personal_best_fitness
+        improved_counter = int(np.count_nonzero(improved_mask))
+        if improved_counter > 0:
+            personal_best_positions[improved_mask] = positions[improved_mask]
+            personal_best_fitness[improved_mask] = fitness[improved_mask]
+
+        iteration_best_idx = int(np.argmin(fitness))
+        iteration_best = float(fitness[iteration_best_idx])
+        if iteration_best < global_best_value:
+            global_best_value = iteration_best
+            global_best_position = positions[iteration_best_idx].copy()
+        gbest_history.append(global_best_position.copy())
+
+        center = np.mean(positions, axis=0)
+        diversity = float(np.mean(np.linalg.norm(positions - center, axis=1)))
+        velocity_norm = float(np.mean(np.linalg.norm(velocities, axis=1)))
+        mean_value = float(np.mean(fitness))
+
+        best_hist.append(global_best_value)
+        mean_hist.append(mean_value)
+        velocity_hist.append(velocity_norm)
+        diversity_hist.append(diversity)
+
+        route_due = (
+            iteration == 1
+            or iteration == config.iterations
+            or iteration % config.route_update_every == 0
+        )
+        analytics_due = (
+            iteration == 1
+            or iteration == config.iterations
+            or iteration % config.analytics_update_every == 0
+        )
+
+        if route_due:
+            surface_ph.plotly_chart(
+                build_pso_3d_surface_figure(
+                    problem=problem,
+                    positions=positions,
+                    fitness=fitness,
+                    velocities=velocities,
+                    pbest_positions=personal_best_positions,
+                    pbest_fitness=personal_best_fitness,
+                    gbest_position=global_best_position,
+                    gbest_value=global_best_value,
+                    gbest_history=gbest_history,
+                    iteration=iteration,
+                ),
+                use_container_width=True,
+                key=f"pso_surface_live_{iteration}",
+            )
+            contour_ph.plotly_chart(
+                build_pso_contour_figure(
+                    problem=problem,
+                    positions=positions,
+                    fitness=fitness,
+                    velocities=velocities,
+                    pbest_positions=personal_best_positions,
+                    gbest_position=global_best_position,
+                    gbest_value=global_best_value,
+                    gbest_history=gbest_history,
+                    iteration=iteration,
+                ),
+                use_container_width=True,
+                key=f"pso_contour_live_{iteration}",
+            )
+            info_text = build_pso_live_info_text(
+                iteration=iteration,
+                config=config,
+                problem=problem,
+                best_value=global_best_value,
+                current_mean=mean_value,
+                first_best=best_hist[0],
+                improved_counter=improved_counter,
+                best_position=global_best_position,
+                velocity_norm=velocity_norm,
+                diversity=diversity,
+            )
+            info_ph.text_area(
+                "Canli bilgi paneli",
+                value=info_text,
+                height=780,
+                disabled=True,
+                label_visibility="collapsed",
+            )
+            progress.progress(iteration / config.iterations)
+            if config.frame_delay > 0:
+                time.sleep(config.frame_delay)
+
+        if analytics_due:
+            progress_ph.plotly_chart(
+                build_pso_progress_figure(best_hist, mean_hist),
+                use_container_width=True,
+                key=f"pso_progress_live_{iteration}",
+            )
+            dynamics_ph.plotly_chart(
+                build_pso_dynamics_figure(velocity_hist, diversity_hist),
+                use_container_width=True,
+                key=f"pso_dynamics_live_{iteration}",
+            )
+
+    return {
+        "algorithm": PSO_ALGORITHM_NAME,
+        "problem_name": problem.name,
+        "best_value": global_best_value,
+        "best_position": global_best_position,
+        "history_best": best_hist,
+        "history_mean": mean_hist,
+        "history_velocity": velocity_hist,
+        "history_diversity": diversity_hist,
+        "improved_particles_last_iter": improved_counter,
+        "completed_iterations": config.iterations,
+        "dimensions": 2,
+    }
+
+
 def main() -> None:
-    st.set_page_config(page_title="GA TSP Turkiye 81 Il", page_icon=":round_pushpin:", layout="wide")
+    st.set_page_config(page_title="Optimizasyon Simulasyonu", page_icon=":round_pushpin:", layout="wide")
     st.markdown(
-        "### Ostim Teknik Üniversitesi Yazılım Mühendisliği  Akıllı Optimizasyon Algoritmaları"
+        "### Ostim Teknik Ãœniversitesi YazÄ±lÄ±m MÃ¼hendisliÄŸi  AkÄ±llÄ± Optimizasyon AlgoritmalarÄ±"
     )
-    st.title("Genetik Algoritma ile TSP: Turkiye'de 81 Il Turu (Izmir baslangic/donus)")
+    st.title("Optimizasyon Cozumu: TSP ve PSO Problem Ailesi")
     st.caption(
-        "Bu uygulama, Izmir'den baslayip 81 ilin tamamina ugrayan ve tekrar Izmir'e donen "
-        "rota icin genetik algoritmanin tum ana adimlarini canli gorsellestirir."
+        "Bu uygulama, TSP tabanli algoritmalar (GA/SA/ACO) ve secili surekli optimizasyon "
+        "problemleri icin PSO adimlarini canli olarak gorsellestirir."
     )
     st.markdown(
         """
@@ -694,68 +2870,169 @@ def main() -> None:
             font-size: 0.86rem !important;
             line-height: 1.35 !important;
         }
+        section[data-testid="stSidebar"] div[data-testid="stExpander"] .stSlider [data-baseweb="slider"] div[role="slider"] {
+            background-color: #16a34a !important;
+            border-color: #16a34a !important;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stExpander"] .stSlider [data-baseweb="slider"] > div > div {
+            background-color: #16a34a !important;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stExpander"] summary p {
+            color: #15803d !important;
+            font-weight: 600 !important;
+        }
         </style>
-        """,
+        """
+        ,
         unsafe_allow_html=True,
     )
 
-    csv_path = Path(__file__).with_name("81il.csv")
-    if not csv_path.exists():
-        st.error("81il.csv bulunamadi. Dosyayi uygulama ile ayni klasore koy.")
-        st.stop()
+    algorithm, config, run_button, clear_button = configure_sidebar()
+    st.caption(f"Secili algoritma: {algorithm}")
 
-    cities = load_turkiye_cities(str(csv_path))
-    if len(cities) != 81:
-        st.warning(f"Uyari: Veri setinden {len(cities)} il yuklendi (beklenen 81).")
+    state_result = st.session_state.get("solver_result")
+    state_algorithm = (
+        state_result["algorithm"] if isinstance(state_result, dict) and "algorithm" in state_result else ""
+    )
+    needs_city_data = algorithm != PSO_ALGORITHM_NAME
+    if state_algorithm and state_algorithm != PSO_ALGORITHM_NAME:
+        needs_city_data = True
 
-    with st.expander("Veri ozeti", expanded=False):
-        c1, c2 = st.columns(2)
-        c1.write(cities[["plate", "city", "lat", "lon"]].head(10))
-        c2.write(cities[["plate", "city", "lat", "lon"]].tail(10))
+    cities: pd.DataFrame | None = None
+    if needs_city_data:
+        csv_path = Path(__file__).with_name("81il.csv")
+        if not csv_path.exists():
+            st.error("81il.csv bulunamadi. Dosyayi uygulama ile ayni klasore koy.")
+            st.stop()
 
-    config, run_button, clear_button = configure_sidebar()
+        cities = load_turkiye_cities(str(csv_path))
+        if len(cities) != 81:
+            st.warning(f"Uyari: Veri setinden {len(cities)} il yuklendi (beklenen 81).")
+
+        with st.expander("Veri ozeti", expanded=False):
+            c1, c2 = st.columns(2)
+            c1.write(cities[["plate", "city", "lat", "lon"]].head(10))
+            c2.write(cities[["plate", "city", "lat", "lon"]].tail(10))
+    elif isinstance(config, PSOConfig):
+        problem_preview = build_pso_problem(config.problem_name)
+        with st.expander("PSO problem ozeti", expanded=False):
+            st.write(f"Problem: **{problem_preview.name}**")
+            st.write(f"Boyut: **2** (x1, x2)")
+            st.write(problem_preview.description)
 
     if clear_button:
         for key in list(st.session_state.keys()):
-            if key.startswith("ga_result"):
+            if key.startswith("ga_result") or key.startswith("solver_result"):
                 del st.session_state[key]
         st.rerun()
 
     if run_button:
-        result = run_genetic_algorithm(cities, config)
-        st.session_state["ga_result"] = result
+        if algorithm == "Genetik Algoritma":
+            if cities is None:
+                st.error("TSP verisi yuklenemedi.")
+                st.stop()
+            result = run_genetic_algorithm(cities, config)
+        elif algorithm == "Tavlama Algoritmasi":
+            if cities is None:
+                st.error("TSP verisi yuklenemedi.")
+                st.stop()
+            result = run_simulated_annealing(cities, config)
+        elif algorithm == "Karinca Kolonisi Algoritmasi":
+            if cities is None:
+                st.error("TSP verisi yuklenemedi.")
+                st.stop()
+            result = run_ant_colony(cities, config)
+        else:
+            result = run_particle_swarm(config)
+        st.session_state["solver_result"] = result
 
-    if "ga_result" in st.session_state:
-        result = st.session_state["ga_result"]
-        st.subheader("Final Sonuc")
-        route_names = [cities.iloc[int(idx)]["city"] for idx in result["best_route"]]
-        col_l, col_r = st.columns([1.2, 2.8], gap="medium")
-        with col_l:
-            st.write(f"Tamamlanan nesil: **{result['completed_generations']}**")
-            st.write(f"En iyi tur: **{result['best_distance']:,.2f} km**")
-            st.write(f"Mutasyon sayisi: **{result['mutation_counter']}**")
-            st.write(f"Crossover sayisi: **{result['crossover_counter']}**")
-        with col_r:
-            st.caption("Final rota metni (kucuk ve kaydirilabilir kutu)")
-            st.text_area(
-                "Final rota",
-                value=" -> ".join(route_names),
-                height=120,
-                label_visibility="collapsed",
+    if "solver_result" in st.session_state:
+        result = st.session_state["solver_result"]
+        st.subheader(f"Final Sonuc - {result['algorithm']}")
+        if result["algorithm"] == PSO_ALGORITHM_NAME:
+            best_position = np.asarray(result["best_position"], dtype=np.float64)
+            col_l, col_r = st.columns([1.2, 2.8], gap="medium")
+            with col_l:
+                st.write(f"Problem: **{result['problem_name']}**")
+                st.write(f"Boyut: **{result['dimensions']}**")
+                st.write(f"Tamamlanan iterasyon: **{result['completed_iterations']}**")
+                st.write(f"En iyi maliyet: **{result['best_value']:.10f}**")
+                st.write(f"Son iterasyonda iyilesen parcacik: **{result['improved_particles_last_iter']}**")
+            with col_r:
+                st.caption("En iyi pozisyon vektoru")
+                position_text = ", ".join([f"{v:.8f}" for v in best_position.tolist()])
+                st.text_area(
+                    "Best position",
+                    value=position_text,
+                    height=120,
+                    label_visibility="collapsed",
+                )
+
+            vector_df = pd.DataFrame({"Dimension": np.arange(1, len(best_position) + 1), "Value": best_position})
+            st.download_button(
+                label="Best pozisyonu CSV indir",
+                data=vector_df.to_csv(index=False).encode("utf-8"),
+                file_name="pso_best_position.csv",
+                mime="text/csv",
             )
+        else:
+            if cities is None:
+                st.error("TSP sonucunu gostermek icin sehir verisi bulunamadi.")
+                st.stop()
+            route_names = [cities.iloc[int(idx)]["city"] for idx in result["best_route"]]
+            col_l, col_r = st.columns([1.2, 2.8], gap="medium")
+            with col_l:
+                st.write(f"En iyi tur: **{result['best_distance']:,.2f} km**")
+                if result["algorithm"] == "Genetik Algoritma":
+                    st.write(f"Tamamlanan nesil: **{result['completed_generations']}**")
+                    st.write(f"Mutasyon sayisi: **{result['mutation_counter']}**")
+                    st.write(f"Crossover sayisi: **{result['crossover_counter']}**")
+                elif result["algorithm"] == "Tavlama Algoritmasi":
+                    acceptance = (result["accepted_moves"] / result["completed_iterations"]) * 100
+                    worse_acceptance = (
+                        result["worse_accepted_moves"] / result["completed_iterations"]
+                    ) * 100
+                    st.write(f"Tamamlanan iterasyon: **{result['completed_iterations']}**")
+                    st.write(f"Kabul edilen hamle: **{result['accepted_moves']}** (%{acceptance:.2f})")
+                    st.write(
+                        f"Kotu ama kabul edilen: **{result['worse_accepted_moves']}** (%{worse_acceptance:.2f})"
+                    )
+                    st.write(f"2-Opt yerel iyilestirme: **{result.get('local_search_hits', 0)}**")
+                    st.write(f"Reheat sayisi: **{result.get('reheat_count', 0)}**")
+                else:
+                    st.write(f"Tamamlanan iterasyon: **{result['completed_iterations']}**")
+                    st.write(f"Karinca sayisi: **{result['ant_count']}**")
+                    st.write(f"Buharlasma orani: **{result['evaporation_rate']:.3f}**")
+                    st.write(f"2-Opt iyilestirme: **{result.get('local_search_hits', 0)}**")
+            with col_r:
+                st.caption("Final rota metni (kucuk ve kaydirilabilir kutu)")
+                st.text_area(
+                    "Final rota",
+                    value=" -> ".join(route_names),
+                    height=120,
+                    label_visibility="collapsed",
+                )
 
-        route_df = pd.DataFrame(
-            {
-                "Sira": np.arange(1, len(route_names) + 1),
-                "Sehir": route_names,
-            }
-        )
-        st.download_button(
-            label="Rotayi CSV indir",
-            data=route_df.to_csv(index=False).encode("utf-8"),
-            file_name="ga_tsp_81il_izmir_rota.csv",
-            mime="text/csv",
-        )
+            route_df = pd.DataFrame(
+                {
+                    "Sira": np.arange(1, len(route_names) + 1),
+                    "Sehir": route_names,
+                }
+            )
+            st.download_button(
+                label="Rotayi CSV indir",
+                data=route_df.to_csv(index=False).encode("utf-8"),
+                file_name=(
+                    "ga_tsp_81il_izmir_rota.csv"
+                    if result["algorithm"] == "Genetik Algoritma"
+                    else (
+                        "sa_tsp_81il_izmir_rota.csv"
+                        if result["algorithm"] == "Tavlama Algoritmasi"
+                        else "aco_tsp_81il_izmir_rota.csv"
+                    )
+                ),
+                mime="text/csv",
+            )
 
 
 if __name__ == "__main__":
