@@ -1,17 +1,17 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
+from .algorithm_briefs import render_algorithm_brief
 from .data import load_turkiye_cities
-from .models import BO_ALGORITHM_NAME, BOConfig, PSO_ALGORITHM_NAME, PSOConfig
+from .models import BOConfig, CMAESConfig, COMPARISON_SEED, PSOConfig
 from .problems import build_pso_problem
 from .registry import algorithm_needs_city_data, run_selected_algorithm
 from .results import render_solver_result
 from .sidebar import configure_sidebar
-
 
 
 def _load_city_data_if_needed(needs_city_data: bool) -> pd.DataFrame | None:
@@ -35,19 +35,26 @@ def _load_city_data_if_needed(needs_city_data: bool) -> pd.DataFrame | None:
     return cities
 
 
-def _render_problem_preview(config: PSOConfig | BOConfig) -> None:
+def _render_problem_preview(config: PSOConfig | BOConfig | CMAESConfig) -> None:
     problem_preview = build_pso_problem(config.problem_name)
     if isinstance(config, PSOConfig):
         with st.expander("PSO problem ozeti", expanded=False):
             st.write(f"Problem: **{problem_preview.name}**")
             st.write("Boyut: **2** (x1, x2)")
             st.write(problem_preview.description)
-    else:
+    elif isinstance(config, BOConfig):
         with st.expander("BO problem ozeti", expanded=False):
             st.write(f"Problem: **{problem_preview.name}**")
             st.write("Boyut: **2** (x1, x2)")
             st.write(f"Kernel: **{config.kernel_type}**")
             st.write(f"Acquisition: **{config.acquisition_type}**")
+            st.write(problem_preview.description)
+    else:
+        with st.expander("CMA-ES problem ozeti", expanded=False):
+            st.write(f"Problem: **{problem_preview.name}**")
+            st.write("Boyut: **2** (x1, x2)")
+            st.write(f"Populasyon (lambda): **{config.population_size}**")
+            st.write(f"Baslangic sigma: **{config.initial_sigma:.3f}**")
             st.write(problem_preview.description)
 
 
@@ -58,11 +65,9 @@ def _clear_session_state() -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Optimizasyon Simulasyonu", page_icon=":round_pushpin:", layout="wide")
-    st.markdown(
-        "### Ostim Teknik ??niversitesi Yaz??l??m M??hendisli??i Ak??ll?? Optimizasyon Algoritmalar??"
-    )
-    st.title("Optimizasyon Cozumu: TSP ve PSO Problem Ailesi")
+    st.set_page_config(page_title="Optimizasyon Simülasyonu", page_icon=":round_pushpin:", layout="wide")
+    st.markdown("### Ostim Teknik Üniversitesi Yazılım Mühendisliği Akıllı Optimizasyon Algoritmaları")
+    st.title("Optimizasyon Çözümü: TSP ve PSO Problem Ailesi")
     st.caption(
         "Bu uygulama, TSP tabanli algoritmalar (GA/SA/Tabu/ACO) ve secili surekli optimizasyon "
         "problemleri icin PSO adimlarini canli olarak gorsellestirir."
@@ -93,18 +98,17 @@ def main() -> None:
 
     algorithm, config, run_button, clear_button = configure_sidebar()
     st.caption(f"Secili algoritma: {algorithm}")
+    st.caption(f"Karsilastirma modu aktif: Tum algoritmalar seed={COMPARISON_SEED} ile calismalidir.")
 
     state_result = st.session_state.get("solver_result")
-    state_algorithm = (
-        state_result["algorithm"] if isinstance(state_result, dict) and "algorithm" in state_result else ""
-    )
+    state_algorithm = state_result["algorithm"] if isinstance(state_result, dict) and "algorithm" in state_result else ""
     needs_city_data = algorithm_needs_city_data(algorithm)
     if state_algorithm:
         needs_city_data = needs_city_data or algorithm_needs_city_data(state_algorithm)
 
     cities = _load_city_data_if_needed(needs_city_data)
 
-    if not needs_city_data and isinstance(config, (PSOConfig, BOConfig)):
+    if not needs_city_data and isinstance(config, (PSOConfig, BOConfig, CMAESConfig)):
         _render_problem_preview(config)
 
     if clear_button:
@@ -117,3 +121,6 @@ def main() -> None:
 
     if "solver_result" in st.session_state:
         render_solver_result(st.session_state["solver_result"], cities)
+
+    # Keep pedagogical brief at the bottom so live visualizations remain at the top.
+    render_algorithm_brief(algorithm)

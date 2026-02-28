@@ -4,13 +4,13 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from .models import BO_ALGORITHM_NAME, PSO_ALGORITHM_NAME
+from .models import BO_ALGORITHM_NAME, CMA_ES_ALGORITHM_NAME, PSO_ALGORITHM_NAME
 
 
 
 def render_solver_result(result: dict, cities: pd.DataFrame | None) -> None:
     st.subheader(f"Final Sonuc - {result['algorithm']}")
-    if result["algorithm"] in (PSO_ALGORITHM_NAME, BO_ALGORITHM_NAME):
+    if result["algorithm"] in (PSO_ALGORITHM_NAME, BO_ALGORITHM_NAME, CMA_ES_ALGORITHM_NAME):
         _render_continuous_result(result)
     else:
         _render_tsp_result(result, cities)

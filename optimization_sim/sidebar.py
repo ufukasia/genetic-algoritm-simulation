@@ -6,6 +6,8 @@ from .models import (
     ACOConfig,
     BO_ALGORITHM_NAME,
     BOConfig,
+    CMA_ES_ALGORITHM_NAME,
+    CMAESConfig,
     GAConfig,
     PSO_ALGORITHM_NAME,
     PSO_PROBLEM_LABELS,
@@ -14,7 +16,7 @@ from .models import (
     TabuConfig,
 )
 
-def configure_sidebar() -> tuple[str, GAConfig | SAConfig | TabuConfig | ACOConfig | PSOConfig | BOConfig, bool, bool]:
+def configure_sidebar() -> tuple[str, GAConfig | SAConfig | TabuConfig | ACOConfig | PSOConfig | BOConfig | CMAESConfig, bool, bool]:
     run_button = st.sidebar.button("Calistir", type="primary", use_container_width=True)
     clear_button = st.sidebar.button("Oturumu sifirla", use_container_width=True)
     st.sidebar.divider()
@@ -27,6 +29,7 @@ def configure_sidebar() -> tuple[str, GAConfig | SAConfig | TabuConfig | ACOConf
             "Karinca Kolonisi Algoritmasi",
             PSO_ALGORITHM_NAME,
             BO_ALGORITHM_NAME,
+            CMA_ES_ALGORITHM_NAME,
         ],
         index=0,
     )
@@ -264,7 +267,7 @@ def configure_sidebar() -> tuple[str, GAConfig | SAConfig | TabuConfig | ACOConf
             frame_delay=frame_delay,
             random_seed=int(random_seed),
         )
-    else:
+    elif algorithm == BO_ALGORITHM_NAME:
         st.sidebar.header("Bayesian Optimization Parametreleri")
         problem_name = st.sidebar.selectbox("Benchmark fonksiyon", PSO_PROBLEM_LABELS, index=1, key="bo_problem")
         st.sidebar.caption("Tum problemler 2D (x1, x2) olarak calisir. GP surrogate model uzerinde gorsellestirilir.")
@@ -304,6 +307,46 @@ def configure_sidebar() -> tuple[str, GAConfig | SAConfig | TabuConfig | ACOConf
             acquisition_type=acquisition_type,
             kappa=kappa,
             xi=xi,
+            route_update_every=route_update_every,
+            analytics_update_every=analytics_update_every,
+            frame_delay=frame_delay,
+            random_seed=int(random_seed),
+        )
+    else:
+        st.sidebar.header("CMA-ES Parametreleri")
+        problem_name = st.sidebar.selectbox("Benchmark fonksiyon", PSO_PROBLEM_LABELS, index=1, key="cma_problem")
+        st.sidebar.caption("CMA-ES, cok modlu ve zor surekli fonksiyonlarda guclu bir modern yontemdir.")
+
+        population_size = st.sidebar.slider("Populasyon boyutu (lambda)", 6, 120, 24, step=2, key="cma_pop")
+        iterations_slider = st.sidebar.slider(
+            "Iterasyon sayisi (slider)", 10, 3000, 300, step=10, key="cma_iterations_slider"
+        )
+        iterations_manual = st.sidebar.number_input(
+            "Iterasyon sayisi (manuel)",
+            min_value=10,
+            max_value=50000,
+            value=int(iterations_slider),
+            step=10,
+            key="cma_iterations_manual",
+        )
+        iterations = int(iterations_manual)
+        initial_sigma = st.sidebar.slider("Baslangic adim boyu (sigma)", 0.01, 5.0, 1.20, step=0.01, key="cma_sigma")
+        sigma_decay = st.sidebar.slider("Sigma decay", 0.900, 1.000, 0.995, step=0.001, key="cma_decay")
+        elite_ratio = st.sidebar.slider("Elit oran (mu/lambda)", 0.10, 0.80, 0.45, step=0.01, key="cma_elite")
+        with st.sidebar.expander("Canli Akis Ayarlari", expanded=True):
+            route_update_every = st.slider("Gorsel guncelleme (iterasyonda bir)", 1, 50, 5, key="cma_route_upd")
+            analytics_update_every = st.slider("Grafik guncelleme (iterasyonda bir)", 1, 100, 10, key="cma_analytics_upd")
+            frame_delay = st.slider("Kare gecikmesi (sn)", 0.0, 1.00, 0.05, step=0.01, key="cma_delay")
+        random_seed = st.sidebar.number_input(
+            "Rastgele tohum", min_value=0, max_value=999999, value=42, key="cma_seed"
+        )
+        config = CMAESConfig(
+            problem_name=problem_name,
+            population_size=population_size,
+            iterations=iterations,
+            initial_sigma=initial_sigma,
+            sigma_decay=sigma_decay,
+            elite_ratio=elite_ratio,
             route_update_every=route_update_every,
             analytics_update_every=analytics_update_every,
             frame_delay=frame_delay,

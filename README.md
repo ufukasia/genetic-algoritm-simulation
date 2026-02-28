@@ -27,6 +27,19 @@ Bu proje, Turkiye'deki 81 il icin gezgin satici problemini (TSP) birden fazla yo
 4. `optimization_sim/registry.py` icinde `ALGORITHM_SPECS` tablosuna yeni kayit ekle.
 5. Gerekirse `optimization_sim/results.py` icinde final sonuc gosterimini genislet.
 
+## Algoritma sozlesmesi (zorunlu)
+
+- Her algoritma tek bir `run_*` fonksiyonu ve tek bir `*Config` dataclass ile tanimlanir.
+- Aktivasyon sadece `optimization_sim/registry.py` icindeki `ALGORITHM_SPECS` kaydi ile yapilir.
+- Tum runner ciktilari registry tarafinda ortak anahtarlara normalize edilir:
+  - `best`
+  - `history`
+  - `completed_iterations`
+  - `random_seed`
+  - `benchmark`
+- Karsilastirma tutarliligi icin seed zorunludur: `42`.
+- Surekli optimizasyon benchmark seti sabittir: `PSO_PROBLEM_LABELS` (Schwefel, Ackley, Rastrigin, Rosenbrock, Levy).
+
 ## Lokal calistirma
 
 1. Sanal ortam olustur:

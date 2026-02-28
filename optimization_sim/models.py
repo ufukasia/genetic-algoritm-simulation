@@ -8,6 +8,7 @@ import numpy as np
 EARTH_RADIUS_KM = 6371.0088
 PSO_ALGORITHM_NAME = "Particle Swarm Optimization (PSO)"
 BO_ALGORITHM_NAME = "Bayesian Optimization (BO)"
+CMA_ES_ALGORITHM_NAME = "Covariance Matrix Adaptation Evolution Strategy (CMA-ES)"
 TR_ASCII = str.maketrans(
     {
         "\u00C7": "C",
@@ -34,6 +35,9 @@ PSO_PROBLEM_LABELS = [
     "Rosenbrock (genis)",
     "Levy",
 ]
+CONTINUOUS_BENCHMARK_SET = tuple(PSO_PROBLEM_LABELS)
+TSP_BENCHMARK_NAME = "TSP-81IL-IZMIR"
+COMPARISON_SEED = 42
 
 @dataclass
 class GAConfig:
@@ -122,6 +126,20 @@ class BOConfig:
     acquisition_type: str
     kappa: float
     xi: float
+    route_update_every: int
+    analytics_update_every: int
+    frame_delay: float
+    random_seed: int
+
+
+@dataclass
+class CMAESConfig:
+    problem_name: str
+    population_size: int
+    iterations: int
+    initial_sigma: float
+    sigma_decay: float
+    elite_ratio: float
     route_update_every: int
     analytics_update_every: int
     frame_delay: float

@@ -12,7 +12,7 @@ from sklearn.gaussian_process.kernels import ConstantKernel as C
 from sklearn.gaussian_process.kernels import Matern, RBF
 
 from .data import build_distance_matrix
-from .models import ACOConfig, BO_ALGORITHM_NAME, BOConfig, GAConfig, PSO_ALGORITHM_NAME, PSOConfig, SAConfig, TabuConfig
+from .models import ACOConfig, BO_ALGORITHM_NAME, BOConfig, CMA_ES_ALGORITHM_NAME, CMAESConfig, GAConfig, PSO_ALGORITHM_NAME, PSOConfig, SAConfig, TabuConfig
 from .operators import (
     add_pheromone_for_route,
     apply_two_opt_segment,
@@ -1124,6 +1124,173 @@ def run_particle_swarm(config: PSOConfig) -> dict:
         "history_velocity": velocity_hist,
         "history_diversity": diversity_hist,
         "improved_particles_last_iter": improved_counter,
+        "completed_iterations": config.iterations,
+        "dimensions": 2,
+    }
+
+
+def run_cma_es(config: CMAESConfig) -> dict:
+    problem = build_pso_problem(config.problem_name)
+    rng = np.random.default_rng(config.random_seed)
+
+    lb = problem.lower_bounds.astype(np.float64)
+    ub = problem.upper_bounds.astype(np.float64)
+    dim = 2
+    mean = rng.uniform(lb, ub)
+    sigma = float(config.initial_sigma)
+    cov = np.eye(dim, dtype=np.float64)
+
+    lambda_ = max(4, int(config.population_size))
+    mu = max(2, int(lambda_ * config.elite_ratio))
+    weights = np.log(mu + 0.5) - np.log(np.arange(1, mu + 1))
+    weights = weights / np.sum(weights)
+
+    best_value = float("inf")
+    best_position = mean.copy()
+    best_hist: list[float] = []
+    mean_hist: list[float] = []
+    sigma_hist: list[float] = []
+    diversity_hist: list[float] = []
+    gbest_history: list[np.ndarray] = [best_position.copy()]
+    stagnation_counter = 0
+    stagnation_limit = max(20, config.iterations // 8)
+
+    progress = st.progress(0.0)
+    left_col, right_col = st.columns([3.4, 1.6], gap="medium")
+    with left_col:
+        surface_ph = st.empty()
+        contour_ph = st.empty()
+        line_left, line_right = st.columns(2)
+        progress_ph = line_left.empty()
+        dynamics_ph = line_right.empty()
+    with right_col:
+        st.caption("Canli bilgi paneli")
+        info_ph = st.empty()
+
+    for iteration in range(1, config.iterations + 1):
+        samples = rng.multivariate_normal(mean=mean, cov=(sigma**2) * cov, size=lambda_)
+        positions = np.clip(samples, lb, ub)
+        fitness = np.asarray([problem.objective(pos) for pos in positions], dtype=np.float64)
+        order = np.argsort(fitness)
+        elites = positions[order[:mu]]
+        elite_fitness = fitness[order[:mu]]
+
+        mean = np.sum(weights[:, None] * elites, axis=0)
+        centered = elites - mean
+        cov = (centered.T @ (centered * weights[:, None])) / max(np.sum(weights), 1e-12)
+        cov += np.eye(dim) * 1e-9
+        iter_best = float(elite_fitness[0])
+        if iter_best < best_value:
+            best_value = iter_best
+            best_position = elites[0].copy()
+            stagnation_counter = 0
+            sigma = min(5.0, sigma * 1.03)
+        else:
+            stagnation_counter += 1
+            sigma = max(1e-4, sigma * config.sigma_decay)
+
+        if stagnation_counter >= stagnation_limit:
+            mean = rng.uniform(lb, ub)
+            cov = np.eye(dim, dtype=np.float64)
+            sigma = max(config.initial_sigma, sigma * 1.2)
+            stagnation_counter = 0
+
+        gbest_history.append(best_position.copy())
+
+        diversity = float(np.mean(np.linalg.norm(positions - np.mean(positions, axis=0), axis=1)))
+        mean_value = float(np.mean(fitness))
+        best_hist.append(best_value)
+        mean_hist.append(mean_value)
+        sigma_hist.append(float(sigma))
+        diversity_hist.append(diversity)
+
+        route_due = (
+            iteration == 1
+            or iteration == config.iterations
+            or iteration % config.route_update_every == 0
+        )
+        analytics_due = (
+            iteration == 1
+            or iteration == config.iterations
+            or iteration % config.analytics_update_every == 0
+        )
+
+        if route_due:
+            fake_velocities = np.zeros_like(positions)
+            surface_ph.plotly_chart(
+                build_pso_3d_surface_figure(
+                    problem=problem,
+                    positions=positions,
+                    fitness=fitness,
+                    velocities=fake_velocities,
+                    pbest_positions=elites,
+                    pbest_fitness=elite_fitness,
+                    gbest_position=best_position,
+                    gbest_value=best_value,
+                    gbest_history=gbest_history,
+                    iteration=iteration,
+                ),
+                use_container_width=True,
+                key=f"cma_surface_live_{iteration}",
+            )
+            contour_ph.plotly_chart(
+                build_pso_contour_figure(
+                    problem=problem,
+                    positions=positions,
+                    fitness=fitness,
+                    velocities=fake_velocities,
+                    pbest_positions=elites,
+                    gbest_position=best_position,
+                    gbest_value=best_value,
+                    gbest_history=gbest_history,
+                    iteration=iteration,
+                ),
+                use_container_width=True,
+                key=f"cma_contour_live_{iteration}",
+            )
+            info_text = (
+                f"ITERASYON: {iteration} / {config.iterations}\n"
+                f"Problem: {problem.name}\n"
+                f"Best: {best_value:.8f}\n"
+                f"Ortalama: {mean_value:.8f}\n"
+                f"Sigma: {sigma:.6f}\n"
+                f"Cesitlilik: {diversity:.6f}\n"
+                f"Lambda (pop): {lambda_}\n"
+                f"Mu (elit): {mu}\n"
+                f"Sigma decay: {config.sigma_decay:.3f}"
+            )
+            info_ph.text_area(
+                "Canli bilgi paneli",
+                value=info_text,
+                height=780,
+                disabled=True,
+                label_visibility="collapsed",
+            )
+            progress.progress(iteration / config.iterations)
+            if config.frame_delay > 0:
+                time.sleep(config.frame_delay)
+
+        if analytics_due:
+            progress_ph.plotly_chart(
+                build_pso_progress_figure(best_hist, mean_hist),
+                use_container_width=True,
+                key=f"cma_progress_live_{iteration}",
+            )
+            dynamics_ph.plotly_chart(
+                build_pso_dynamics_figure(sigma_hist, diversity_hist),
+                use_container_width=True,
+                key=f"cma_dynamics_live_{iteration}",
+            )
+
+    return {
+        "algorithm": CMA_ES_ALGORITHM_NAME,
+        "problem_name": problem.name,
+        "best_value": best_value,
+        "best_position": best_position,
+        "history_best": best_hist,
+        "history_mean": mean_hist,
+        "history_sigma": sigma_hist,
+        "history_diversity": diversity_hist,
         "completed_iterations": config.iterations,
         "dimensions": 2,
     }
