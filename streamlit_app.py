@@ -10,10 +10,14 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF, Matern, ConstantKernel as C
+from scipy.stats import norm as scipy_norm
 
 
 EARTH_RADIUS_KM = 6371.0088
 PSO_ALGORITHM_NAME = "Particle Swarm Optimization (PSO)"
+BO_ALGORITHM_NAME = "Bayesian Optimization (BO)"
 TR_ASCII = str.maketrans(
     {
         "\u00C7": "C",
@@ -70,6 +74,21 @@ class SAConfig:
 
 
 @dataclass
+class TabuConfig:
+    iterations: int
+    candidate_pool_size: int
+    tabu_tenure: int
+    aspiration_enabled: bool
+    stagnation_limit: int
+    kick_ratio: float
+    route_update_every: int
+    analytics_update_every: int
+    moves_update_every: int
+    frame_delay: float
+    random_seed: int
+
+
+@dataclass
 class ACOConfig:
     ant_count: int
     iterations: int
@@ -96,6 +115,21 @@ class PSOConfig:
     cognitive_coeff: float
     social_coeff: float
     velocity_clamp_ratio: float
+    route_update_every: int
+    analytics_update_every: int
+    frame_delay: float
+    random_seed: int
+
+
+@dataclass
+class BOConfig:
+    problem_name: str
+    n_initial: int
+    n_iterations: int
+    kernel_type: str
+    acquisition_type: str
+    kappa: float
+    xi: float
     route_update_every: int
     analytics_update_every: int
     frame_delay: float
@@ -504,6 +538,24 @@ def best_two_opt_improvement(
     return improved, current_distance + best_delta, best_pair
 
 
+def sample_two_opt_pairs(
+    n: int, candidate_count: int, rng: np.random.Generator
+) -> list[tuple[int, int]]:
+    total_pairs = n * (n - 1) // 2
+    if total_pairs <= 0:
+        return []
+
+    target = max(1, min(candidate_count, total_pairs))
+    if target == total_pairs:
+        return [(i, j) for i in range(n - 1) for j in range(i + 1, n)]
+
+    pairs: set[tuple[int, int]] = set()
+    while len(pairs) < target:
+        i, j = sorted(rng.choice(n, size=2, replace=False))
+        pairs.add((int(i), int(j)))
+    return list(pairs)
+
+
 def construct_aco_route(
     start_idx: int,
     available_cities: np.ndarray,
@@ -741,6 +793,48 @@ def build_sa_temperature_figure(
         margin=dict(l=0, r=0, t=35, b=0),
         yaxis=dict(title="Sicaklik"),
         yaxis2=dict(title="Kabul orani", overlaying="y", side="right", range=[0, 1]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0),
+    )
+    return fig
+
+
+def build_tabu_status_figure(
+    tabu_size_hist: list[float], aspiration_hist: list[float], stagnation_hist: list[float]
+) -> go.Figure:
+    iterations = np.arange(1, len(tabu_size_hist) + 1)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=iterations,
+            y=tabu_size_hist,
+            mode="lines",
+            name="Tabu liste boyutu",
+            yaxis="y1",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=iterations,
+            y=stagnation_hist,
+            mode="lines",
+            name="Stagnasyon",
+            yaxis="y1",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=iterations,
+            y=aspiration_hist,
+            mode="lines",
+            name="Aspiration orani",
+            yaxis="y2",
+        )
+    )
+    fig.update_layout(
+        height=290,
+        margin=dict(l=0, r=0, t=35, b=0),
+        yaxis=dict(title="Tabu/Stagnasyon"),
+        yaxis2=dict(title="Aspiration", overlaying="y", side="right", range=[0, 1]),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0),
     )
     return fig
@@ -1326,6 +1420,60 @@ def build_sa_live_info_text(
     return "\n".join(lines)
 
 
+def build_tabu_live_info_text(
+    iteration: int,
+    config: TabuConfig,
+    best_distance: float,
+    current_distance: float,
+    first_best: float,
+    tabu_size: int,
+    stagnation_counter: int,
+    aspiration_counter: int,
+    diversification_counter: int,
+    best_route: np.ndarray,
+    move_events: deque,
+    cities: pd.DataFrame,
+) -> str:
+    improvement = ((first_best - best_distance) / first_best) * 100 if iteration > 1 else 0.0
+    route_names = [cities.iloc[int(idx)]["city"] for idx in best_route[:16]]
+    route_preview = " -> ".join(route_names)
+    if len(best_route) > 16:
+        route_preview += " -> ..."
+
+    aspiration_ratio = aspiration_counter / iteration
+    lines = [
+        f"Iterasyon: {iteration}/{config.iterations}",
+        f"En iyi tur: {best_distance:,.1f} km",
+        f"Mevcut tur: {current_distance:,.1f} km",
+        f"Iyilesme: %{improvement:.2f}",
+        f"Tabu listesi: {tabu_size} | Tenure: {config.tabu_tenure}",
+        f"Aspiration kullanimi: {aspiration_counter} (%{aspiration_ratio * 100:.2f})",
+        f"Stagnasyon sayaci: {stagnation_counter} | Cesitlilik-kick: {diversification_counter}",
+        "",
+        "Rota onizleme:",
+        route_preview,
+        "",
+        "Son hamleler:",
+    ]
+
+    if not move_events:
+        lines.append("(Hamle kaydi henuz yok)")
+        return "\n".join(lines)
+
+    for event in list(move_events)[::-1]:
+        before = ids_to_city_names(event["before"], cities, max_items=4)
+        after = ids_to_city_names(event["after"], cities, max_items=4)
+        tabu_state = "tabu" if event.get("was_tabu", False) else "-"
+        aspiration_state = "asp" if event.get("aspiration", False) else "-"
+        lines.append(
+            f"I{event['iteration']} | {event['operator']} {event['positions']} | d={event['delta_km']:+.1f} km | {tabu_state}/{aspiration_state}"
+        )
+        lines.append(f"  once: {before}")
+        lines.append(f"  sonra: {after}")
+
+    return "\n".join(lines)
+
+
 def build_aco_live_info_text(
     iteration: int,
     config: ACOConfig,
@@ -1821,7 +1969,7 @@ def build_pso_live_info_text(
     return "\n".join(lines)
 
 
-def configure_sidebar() -> tuple[str, GAConfig | SAConfig | ACOConfig | PSOConfig, bool, bool]:
+def configure_sidebar() -> tuple[str, GAConfig | SAConfig | TabuConfig | ACOConfig | PSOConfig | BOConfig, bool, bool]:
     run_button = st.sidebar.button("Calistir", type="primary", use_container_width=True)
     clear_button = st.sidebar.button("Oturumu sifirla", use_container_width=True)
     st.sidebar.divider()
@@ -1830,8 +1978,10 @@ def configure_sidebar() -> tuple[str, GAConfig | SAConfig | ACOConfig | PSOConfi
         [
             "Genetik Algoritma",
             "Tavlama Algoritmasi",
+            "Tabu Search Algoritmasi",
             "Karinca Kolonisi Algoritmasi",
             PSO_ALGORITHM_NAME,
+            BO_ALGORITHM_NAME,
         ],
         index=0,
     )
@@ -1865,7 +2015,7 @@ def configure_sidebar() -> tuple[str, GAConfig | SAConfig | ACOConfig | PSOConfi
             "Rastgele tohum", min_value=0, max_value=999999, value=42, key="ga_seed"
         )
 
-        config: GAConfig | SAConfig | ACOConfig | PSOConfig = GAConfig(
+        config: GAConfig | SAConfig | TabuConfig | ACOConfig | PSOConfig = GAConfig(
             population_size=population_size,
             generations=generations,
             crossover_rate=crossover_rate,
@@ -1934,6 +2084,48 @@ def configure_sidebar() -> tuple[str, GAConfig | SAConfig | ACOConfig | PSOConfi
             frame_delay=frame_delay,
             random_seed=int(random_seed),
         )
+    elif algorithm == "Tabu Search Algoritmasi":
+        st.sidebar.header("Tabu Search Parametreleri")
+        iterations_slider = st.sidebar.slider(
+            "Iterasyon sayisi (slider)", 500, 120000, 30000, step=500
+        )
+        iterations_manual = st.sidebar.number_input(
+            "Iterasyon sayisi (manuel)",
+            min_value=500,
+            max_value=1000000,
+            value=int(iterations_slider),
+            step=500,
+        )
+        iterations = int(iterations_manual)
+        candidate_pool_size = st.sidebar.slider("Aday 2-Opt hamlesi", 20, 1200, 260, step=20)
+        tabu_tenure = st.sidebar.slider("Tabu tenure (iterasyon)", 3, 200, 35, step=1)
+        aspiration_enabled = st.sidebar.checkbox("Aspiration kriteri", value=True)
+        stagnation_limit = st.sidebar.slider("Stagnasyon limiti", 200, 25000, 3500, step=100)
+        kick_ratio = st.sidebar.slider("Cesitlilik-kick orani", 0.02, 0.40, 0.12, step=0.01)
+        with st.sidebar.expander("Canli Akis Ayarlari", expanded=True):
+            route_update_every = st.slider("Rota guncelleme (iterasyonda bir)", 1, 500, 80)
+            analytics_update_every = st.slider(
+                "Grafik guncelleme (iterasyonda bir)", 1, 1000, 120
+            )
+            moves_update_every = st.slider("Hamle grafigi guncelleme", 1, 1000, 120)
+            frame_delay = st.slider("Kare gecikmesi (sn)", 0.0, 0.30, 0.00, step=0.01)
+        random_seed = st.sidebar.number_input(
+            "Rastgele tohum", min_value=0, max_value=999999, value=42, key="tabu_seed"
+        )
+
+        config = TabuConfig(
+            iterations=iterations,
+            candidate_pool_size=candidate_pool_size,
+            tabu_tenure=tabu_tenure,
+            aspiration_enabled=aspiration_enabled,
+            stagnation_limit=stagnation_limit,
+            kick_ratio=kick_ratio,
+            route_update_every=route_update_every,
+            analytics_update_every=analytics_update_every,
+            moves_update_every=moves_update_every,
+            frame_delay=frame_delay,
+            random_seed=int(random_seed),
+        )
     elif algorithm == "Karinca Kolonisi Algoritmasi":
         st.sidebar.header("Karinca Kolonisi Parametreleri")
         ant_count = st.sidebar.slider("Karinca sayisi", 20, 240, 90, step=5)
@@ -1981,7 +2173,7 @@ def configure_sidebar() -> tuple[str, GAConfig | SAConfig | ACOConfig | PSOConfi
             frame_delay=frame_delay,
             random_seed=int(random_seed),
         )
-    else:
+    elif algorithm == PSO_ALGORITHM_NAME:
         st.sidebar.header("PSO Parametreleri")
         problem_name = st.sidebar.selectbox("Benchmark fonksiyon", PSO_PROBLEM_LABELS, index=0)
         st.sidebar.caption("Tum problemler 2D (x1, x2) olarak calisir ve 3D yuzey uzerinde gorsellestirilir.")
@@ -2022,6 +2214,51 @@ def configure_sidebar() -> tuple[str, GAConfig | SAConfig | ACOConfig | PSOConfi
             cognitive_coeff=cognitive_coeff,
             social_coeff=social_coeff,
             velocity_clamp_ratio=velocity_clamp_ratio,
+            route_update_every=route_update_every,
+            analytics_update_every=analytics_update_every,
+            frame_delay=frame_delay,
+            random_seed=int(random_seed),
+        )
+    else:
+        st.sidebar.header("Bayesian Optimization Parametreleri")
+        problem_name = st.sidebar.selectbox("Benchmark fonksiyon", PSO_PROBLEM_LABELS, index=1, key="bo_problem")
+        st.sidebar.caption("Tum problemler 2D (x1, x2) olarak calisir. GP surrogate model uzerinde gorsellestirilir.")
+
+        n_initial = st.sidebar.slider("Baslangic rastgele ornekleme", 3, 30, 8, step=1, key="bo_n_initial")
+        n_iterations = st.sidebar.slider("BO iterasyonu (yeni nokta sayisi)", 5, 100, 35, step=1, key="bo_n_iter")
+
+        st.sidebar.subheader("Gaussian Process (GP)")
+        kernel_type = st.sidebar.selectbox("Kernel (cekirdek) tipi", ["Matern (nu=2.5)", "Matern (nu=1.5)", "RBF"], index=0, key="bo_kernel")
+
+        st.sidebar.subheader("Acquisition Function")
+        st.sidebar.caption("Sonraki noktayi nereye orneklememiz gerektigini belirler.")
+        acquisition_type = st.sidebar.selectbox(
+            "Acquisition fonksiyonu",
+            ["EI (Expected Improvement)", "UCB (Upper Confidence Bound)", "PI (Probability of Improvement)"],
+            index=0, key="bo_acq",
+        )
+        kappa = 2.576
+        xi = 0.01
+        if "UCB" in acquisition_type:
+            kappa = st.sidebar.slider("Kappa (kesif/somuru dengesi)", 0.1, 10.0, 2.576, step=0.1, key="bo_kappa")
+        else:
+            xi = st.sidebar.slider("Xi (iyilesme esigi)", 0.0, 0.5, 0.01, step=0.005, key="bo_xi")
+
+        with st.sidebar.expander("Canli Akis Ayarlari", expanded=True):
+            route_update_every = st.slider("Gorsel guncelleme (iterasyonda bir)", 1, 10, 1, key="bo_route_upd")
+            analytics_update_every = st.slider("Grafik guncelleme (iterasyonda bir)", 1, 20, 2, key="bo_analytics_upd")
+            frame_delay = st.slider("Kare gecikmesi (sn)", 0.0, 2.00, 0.30, step=0.05, key="bo_delay")
+        random_seed = st.sidebar.number_input(
+            "Rastgele tohum", min_value=0, max_value=999999, value=42, key="bo_seed"
+        )
+        config = BOConfig(
+            problem_name=problem_name,
+            n_initial=n_initial,
+            n_iterations=n_iterations,
+            kernel_type=kernel_type,
+            acquisition_type=acquisition_type,
+            kappa=kappa,
+            xi=xi,
             route_update_every=route_update_every,
             analytics_update_every=analytics_update_every,
             frame_delay=frame_delay,
@@ -2441,6 +2678,258 @@ def run_simulated_annealing(cities: pd.DataFrame, config: SAConfig) -> dict:
     }
 
 
+def run_tabu_search(cities: pd.DataFrame, config: TabuConfig) -> dict:
+    idx_izmir = cities.index[cities["city_key"] == "IZMIR"].tolist()
+    if not idx_izmir:
+        raise ValueError("Veri setinde IZMIR bulunamadi.")
+    start_idx = int(idx_izmir[0])
+
+    distance_matrix = build_distance_matrix(cities["lat"].to_numpy(), cities["lon"].to_numpy())
+    available_cities = np.array([i for i in range(len(cities)) if i != start_idx], dtype=np.int16)
+    rng = np.random.default_rng(config.random_seed)
+
+    current_chromosome = rng.permutation(available_cities).astype(np.int16)
+    current_distance = route_distance(current_chromosome, start_idx, distance_matrix)
+    best_chromosome = current_chromosome.copy()
+    best_distance = current_distance
+
+    best_hist: list[float] = []
+    current_hist: list[float] = []
+    tabu_size_hist: list[float] = []
+    aspiration_hist: list[float] = []
+    stagnation_hist: list[float] = []
+    move_events: deque = deque(maxlen=36)
+
+    tabu_expiry: dict[tuple[int, int], int] = {}
+    aspiration_counter = 0
+    diversification_counter = 0
+    stagnation_counter = 0
+
+    progress = st.progress(0.0)
+    left_col, right_col = st.columns([3.4, 1.6], gap="medium")
+    with left_col:
+        route_ph = st.empty()
+        line_left, line_right = st.columns(2)
+        progress_ph = line_left.empty()
+        status_ph = line_right.empty()
+        moves_ph = st.empty()
+    with right_col:
+        st.caption("Canli metin paneli (sabit kutu, kaydirarak incele)")
+        info_ph = st.empty()
+
+    n = len(current_chromosome)
+    for iteration in range(1, config.iterations + 1):
+        expired_moves = [move for move, expiry in tabu_expiry.items() if expiry <= iteration]
+        for move in expired_moves:
+            del tabu_expiry[move]
+
+        candidate_pairs = sample_two_opt_pairs(n, config.candidate_pool_size, rng)
+        chosen_move: tuple[int, int] | None = None
+        chosen_delta = float("inf")
+        chosen_distance = float("inf")
+        chosen_was_tabu = False
+        chosen_aspiration = False
+        fallback_move: tuple[int, int] | None = None
+        fallback_delta = float("inf")
+        fallback_distance = float("inf")
+        fallback_was_tabu = False
+
+        for i, j in candidate_pairs:
+            delta = two_opt_delta(current_chromosome, i, j, start_idx, distance_matrix)
+            candidate_distance = current_distance + delta
+            move = (int(i), int(j))
+            tabu_until = tabu_expiry.get(move, 0)
+            is_tabu = tabu_until > iteration
+            aspiration = bool(config.aspiration_enabled and candidate_distance + 1e-9 < best_distance)
+            admissible = (not is_tabu) or aspiration
+
+            if admissible and candidate_distance < chosen_distance:
+                chosen_move = move
+                chosen_delta = delta
+                chosen_distance = candidate_distance
+                chosen_was_tabu = is_tabu
+                chosen_aspiration = aspiration
+
+            if candidate_distance < fallback_distance:
+                fallback_move = move
+                fallback_delta = delta
+                fallback_distance = candidate_distance
+                fallback_was_tabu = is_tabu
+
+        if chosen_move is None and fallback_move is not None:
+            chosen_move = fallback_move
+            chosen_delta = fallback_delta
+            chosen_distance = fallback_distance
+            chosen_was_tabu = fallback_was_tabu
+            chosen_aspiration = False
+
+        if chosen_move is None:
+            best_hist.append(best_distance)
+            current_hist.append(current_distance)
+            tabu_size_hist.append(float(len(tabu_expiry)))
+            aspiration_hist.append(aspiration_counter / iteration)
+            stagnation_hist.append(float(stagnation_counter))
+            continue
+
+        i, j = chosen_move
+        candidate = apply_two_opt_segment(current_chromosome, i, j)
+        event = {
+            "iteration": iteration,
+            "operator": "2-Opt",
+            "positions": f"{i}-{j}",
+            "before": current_chromosome[i : j + 1].tolist(),
+            "after": candidate[i : j + 1].tolist(),
+            "delta_km": chosen_delta,
+            "temperature": np.nan,
+            "accepted": True,
+            "accepted_worse": chosen_delta > 0,
+            "was_tabu": chosen_was_tabu,
+            "aspiration": chosen_aspiration,
+        }
+        move_events.append(event)
+
+        current_chromosome = candidate
+        current_distance = chosen_distance
+        tabu_expiry[(i, j)] = iteration + config.tabu_tenure
+        if chosen_aspiration:
+            aspiration_counter += 1
+
+        if current_distance + 1e-9 < best_distance:
+            best_distance = current_distance
+            best_chromosome = current_chromosome.copy()
+            stagnation_counter = 0
+        else:
+            stagnation_counter += 1
+
+        if config.stagnation_limit > 0 and stagnation_counter >= config.stagnation_limit:
+            diversification_counter += 1
+            before_kick = current_distance
+            current_chromosome = best_chromosome.copy()
+            kick_moves = max(2, int(len(current_chromosome) * config.kick_ratio))
+            for _ in range(kick_moves):
+                a, b = sorted(rng.choice(len(current_chromosome), size=2, replace=False))
+                current_chromosome[a], current_chromosome[b] = current_chromosome[b], current_chromosome[a]
+            current_distance = route_distance(current_chromosome, start_idx, distance_matrix)
+            tabu_expiry.clear()
+            stagnation_counter = 0
+            move_events.append(
+                {
+                    "iteration": iteration,
+                    "operator": "Diversification-Kick",
+                    "positions": f"{kick_moves} swap",
+                    "before": [],
+                    "after": [],
+                    "delta_km": current_distance - before_kick,
+                    "temperature": np.nan,
+                    "accepted": True,
+                    "accepted_worse": current_distance > before_kick,
+                    "was_tabu": False,
+                    "aspiration": False,
+                }
+            )
+
+            if current_distance + 1e-9 < best_distance:
+                best_distance = current_distance
+                best_chromosome = current_chromosome.copy()
+
+        best_hist.append(best_distance)
+        current_hist.append(current_distance)
+        tabu_size_hist.append(float(len(tabu_expiry)))
+        aspiration_hist.append(aspiration_counter / iteration)
+        stagnation_hist.append(float(stagnation_counter))
+
+        route_due = (
+            iteration == 1
+            or iteration == config.iterations
+            or iteration % config.route_update_every == 0
+        )
+        analytics_due = (
+            iteration == 1
+            or iteration == config.iterations
+            or iteration % config.analytics_update_every == 0
+        )
+        moves_due = (
+            iteration == 1
+            or iteration == config.iterations
+            or iteration % config.moves_update_every == 0
+        )
+
+        if route_due:
+            best_route = np.concatenate(([start_idx], best_chromosome, [start_idx]))
+            route_fig = build_route_figure(
+                best_route,
+                cities,
+                iteration,
+                best_distance,
+                step_label="Iterasyon",
+            )
+            route_ph.plotly_chart(
+                route_fig,
+                use_container_width=True,
+                key=f"route_tabu_live_{iteration}",
+            )
+            info_text = build_tabu_live_info_text(
+                iteration=iteration,
+                config=config,
+                best_distance=best_distance,
+                current_distance=current_distance,
+                first_best=best_hist[0],
+                tabu_size=len(tabu_expiry),
+                stagnation_counter=stagnation_counter,
+                aspiration_counter=aspiration_counter,
+                diversification_counter=diversification_counter,
+                best_route=best_route,
+                move_events=move_events,
+                cities=cities,
+            )
+            info_ph.text_area(
+                "Canli bilgi paneli",
+                value=info_text,
+                height=780,
+                disabled=True,
+                label_visibility="collapsed",
+            )
+            progress.progress(iteration / config.iterations)
+            if config.frame_delay > 0:
+                time.sleep(config.frame_delay)
+
+        if analytics_due:
+            progress_ph.plotly_chart(
+                build_sa_progress_figure(best_hist, current_hist),
+                use_container_width=True,
+                key=f"progress_tabu_live_{iteration}",
+            )
+            status_ph.plotly_chart(
+                build_tabu_status_figure(tabu_size_hist, aspiration_hist, stagnation_hist),
+                use_container_width=True,
+                key=f"status_tabu_live_{iteration}",
+            )
+
+        if moves_due:
+            moves_ph.plotly_chart(
+                build_sa_moves_figure(move_events),
+                use_container_width=True,
+                key=f"moves_tabu_live_{iteration}",
+            )
+
+    final_route = np.concatenate(([start_idx], best_chromosome, [start_idx]))
+    return {
+        "algorithm": "Tabu Search Algoritmasi",
+        "best_distance": best_distance,
+        "best_route": final_route,
+        "history_best": best_hist,
+        "history_current": current_hist,
+        "history_tabu_size": tabu_size_hist,
+        "history_aspiration": aspiration_hist,
+        "history_stagnation": stagnation_hist,
+        "completed_iterations": config.iterations,
+        "tabu_tenure": config.tabu_tenure,
+        "candidate_pool_size": config.candidate_pool_size,
+        "aspiration_count": aspiration_counter,
+        "diversification_count": diversification_counter,
+    }
+
+
 def run_ant_colony(cities: pd.DataFrame, config: ACOConfig) -> dict:
     idx_izmir = cities.index[cities["city_key"] == "IZMIR"].tolist()
     if not idx_izmir:
@@ -2852,6 +3341,420 @@ def run_particle_swarm(config: PSOConfig) -> dict:
     }
 
 
+# ============================================================
+# BAYESIAN OPTIMIZATION VISUALIZATION & RUN FUNCTIONS
+# ============================================================
+
+def _bo_build_kernel(kernel_type: str):
+    """Kernel olustur."""
+    if "RBF" in kernel_type:
+        return C(1.0, (1e-3, 1e3)) * RBF(length_scale=1.0, length_scale_bounds=(1e-2, 1e2))
+    elif "1.5" in kernel_type:
+        return C(1.0, (1e-3, 1e3)) * Matern(length_scale=1.0, length_scale_bounds=(1e-2, 1e2), nu=1.5)
+    else:
+        return C(1.0, (1e-3, 1e3)) * Matern(length_scale=1.0, length_scale_bounds=(1e-2, 1e2), nu=2.5)
+
+
+def _bo_acquisition(X_cand: np.ndarray, gp: GaussianProcessRegressor,
+                    y_best: float, acq_type: str, kappa: float, xi: float) -> np.ndarray:
+    """Acquisition function degerlerini hesapla."""
+    mu, sigma = gp.predict(X_cand, return_std=True)
+    sigma = np.maximum(sigma, 1e-9)
+
+    if "UCB" in acq_type:
+        return -(mu - kappa * sigma)  # minimize -> negate UCB
+    elif "PI" in acq_type:
+        z = (y_best - mu - xi) / sigma
+        return -scipy_norm.cdf(z)
+    else:  # EI
+        z = (y_best - mu - xi) / sigma
+        ei = (y_best - mu - xi) * scipy_norm.cdf(z) + sigma * scipy_norm.pdf(z)
+        return -ei  # negate for argmin
+
+
+def build_bo_surrogate_figure(
+    problem: PSOProblem,
+    X_sampled: np.ndarray,
+    y_sampled: np.ndarray,
+    gp: GaussianProcessRegressor,
+    next_point: np.ndarray | None,
+    iteration: int,
+    grid_resolution: int = 60,
+):
+    """GP surrogate model 3D yuzey + belirsizlik + orneklenen noktalar."""
+    lb, ub = problem.lower_bounds, problem.upper_bounds
+    x1 = np.linspace(lb[0], ub[0], grid_resolution)
+    x2 = np.linspace(lb[1], ub[1], grid_resolution)
+    X1, X2 = np.meshgrid(x1, x2)
+    X_grid = np.column_stack([X1.ravel(), X2.ravel()])
+
+    mu, sigma = gp.predict(X_grid, return_std=True)
+    Mu = mu.reshape(grid_resolution, grid_resolution)
+    Sigma = sigma.reshape(grid_resolution, grid_resolution)
+
+    fig = go.Figure()
+
+    # GP mean surface
+    fig.add_trace(go.Surface(
+        x=X1, y=X2, z=Mu,
+        colorscale="Viridis", opacity=0.7,
+        colorbar=dict(title="GP mu(x)", x=1.02, len=0.45, y=0.75),
+        name="GP Ortalama (mu)",
+        showlegend=True,
+    ))
+
+    # GP uncertainty surface (mu + 2*sigma)
+    fig.add_trace(go.Surface(
+        x=X1, y=X2, z=Mu + 2 * Sigma,
+        colorscale="Oranges", opacity=0.25,
+        showscale=False,
+        name="Belirsizlik (mu+2sigma)",
+        showlegend=True,
+    ))
+
+    # Sampled points
+    z_sampled = gp.predict(X_sampled)
+    fig.add_trace(go.Scatter3d(
+        x=X_sampled[:, 0], y=X_sampled[:, 1], z=y_sampled,
+        mode="markers",
+        marker=dict(size=6, color="red", symbol="circle",
+                    line=dict(width=1, color="white")),
+        name=f"Orneklenen ({len(X_sampled)})",
+    ))
+
+    # Next point
+    if next_point is not None:
+        z_next = gp.predict(next_point.reshape(1, -1))
+        fig.add_trace(go.Scatter3d(
+            x=[next_point[0]], y=[next_point[1]], z=[z_next[0]],
+            mode="markers",
+            marker=dict(size=12, color="yellow", symbol="diamond",
+                        line=dict(width=2, color="black")),
+            name="Sonraki nokta",
+        ))
+
+    # True minimum
+    fig.add_trace(go.Scatter3d(
+        x=[problem.global_min[0]], y=[problem.global_min[1]],
+        z=[problem.global_min_value],
+        mode="markers",
+        marker=dict(size=8, color="#22c55e", symbol="cross",
+                    line=dict(width=1, color="white")),
+        name="Gercek minimum",
+    ))
+
+    best_idx = int(np.argmin(y_sampled))
+    best_val = y_sampled[best_idx]
+    dist_to_min = np.linalg.norm(X_sampled[best_idx] - problem.global_min)
+    fig.update_layout(
+        title=dict(
+            text=(
+                f"<b>Bayesian Optimization — GP Surrogate</b> | {problem.name} | Iterasyon {iteration}"
+                f"<br><span style='font-size:12px;color:#64748b'>"
+                f"Best={best_val:.6f} | Min'e uzaklik={dist_to_min:.4f} | Orneklem={len(X_sampled)}</span>"
+            ),
+            font=dict(size=14),
+        ),
+        height=620,
+        margin=dict(l=0, r=0, t=80, b=0),
+        scene=dict(
+            xaxis_title="x1", yaxis_title="x2", zaxis_title="f(x)",
+            bgcolor="rgba(15,23,42,0.03)",
+            camera=dict(eye=dict(x=1.6, y=1.6, z=1.0)),
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.05, x=0.0, font=dict(size=10)),
+    )
+    return fig
+
+
+def build_bo_acquisition_contour(
+    problem: PSOProblem,
+    X_sampled: np.ndarray,
+    y_sampled: np.ndarray,
+    gp: GaussianProcessRegressor,
+    next_point: np.ndarray | None,
+    acq_type: str,
+    kappa: float,
+    xi: float,
+    iteration: int,
+    grid_resolution: int = 80,
+):
+    """Acquisition function 2D kontur haritasi."""
+    lb, ub = problem.lower_bounds, problem.upper_bounds
+    x1 = np.linspace(lb[0], ub[0], grid_resolution)
+    x2 = np.linspace(lb[1], ub[1], grid_resolution)
+    X1, X2 = np.meshgrid(x1, x2)
+    X_grid = np.column_stack([X1.ravel(), X2.ravel()])
+
+    y_best = float(np.min(y_sampled))
+    acq_vals = _bo_acquisition(X_grid, gp, y_best, acq_type, kappa, xi)
+    Acq = (-acq_vals).reshape(grid_resolution, grid_resolution)  # flip back for display
+
+    acq_label = acq_type.split(" (")[0]
+    fig = go.Figure()
+    fig.add_trace(go.Contour(
+        x=x1, y=x2, z=Acq,
+        colorscale="Hot", ncontours=25,
+        colorbar=dict(title=acq_label, len=0.6),
+        name=acq_label,
+    ))
+
+    # Sampled points
+    fig.add_trace(go.Scatter(
+        x=X_sampled[:, 0], y=X_sampled[:, 1],
+        mode="markers",
+        marker=dict(size=8, color="cyan", symbol="circle",
+                    line=dict(width=1, color="black")),
+        name=f"Orneklenen ({len(X_sampled)})",
+    ))
+
+    # Next point
+    if next_point is not None:
+        fig.add_trace(go.Scatter(
+            x=[next_point[0]], y=[next_point[1]],
+            mode="markers",
+            marker=dict(size=14, color="yellow", symbol="star",
+                        line=dict(width=2, color="black")),
+            name="Sonraki nokta",
+        ))
+
+    # True minimum
+    fig.add_trace(go.Scatter(
+        x=[problem.global_min[0]], y=[problem.global_min[1]],
+        mode="markers",
+        marker=dict(size=10, color="#22c55e", symbol="cross",
+                    line=dict(width=1.5, color="white")),
+        name="Gercek minimum",
+    ))
+
+    fig.update_layout(
+        title=dict(text=f"<b>Acquisition Function ({acq_label})</b> | Iterasyon {iteration}", font=dict(size=13)),
+        xaxis_title="x1", yaxis_title="x2",
+        height=420,
+        margin=dict(l=40, r=10, t=50, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.18, x=0.0, font=dict(size=10)),
+    )
+    return fig
+
+
+def build_bo_progress_figure(best_hist: list[float], sample_hist: list[float]):
+    """BO ilerleme grafigi."""
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(y=best_hist, mode="lines+markers",
+                             name="En iyi (best)", line=dict(width=2.5, color="#ef4444"),
+                             marker=dict(size=4)))
+    fig.add_trace(go.Scatter(y=sample_hist, mode="markers",
+                             name="Son orneklem", marker=dict(size=5, color="#3b82f6", opacity=0.6)))
+    fig.update_layout(
+        title="BO Ilerleme: En Iyi Deger",
+        xaxis_title="Toplam orneklem", yaxis_title="f(x)",
+        height=280, margin=dict(l=40, r=10, t=40, b=30),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0),
+    )
+    return fig
+
+
+def build_bo_uncertainty_figure(sigma_hist: list[float]):
+    """GP belirsizlik (ortalama sigma) grafigi."""
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(y=sigma_hist, mode="lines+markers",
+                             name="Ort. sigma", line=dict(width=2, color="#f59e0b"),
+                             marker=dict(size=3)))
+    fig.update_layout(
+        title="GP Belirsizlik (Ort. Sigma)",
+        xaxis_title="Iterasyon", yaxis_title="Ortalama sigma",
+        height=280, margin=dict(l=40, r=10, t=40, b=30),
+    )
+    return fig
+
+
+def build_bo_live_info_text(
+    iteration: int, config: BOConfig, problem: PSOProblem,
+    best_value: float, best_position: np.ndarray,
+    n_samples: int, avg_sigma: float,
+    first_best: float,
+) -> str:
+    """BO canli bilgi paneli."""
+    dist = np.linalg.norm(best_position - problem.global_min)
+    improvement = max(0.0, (first_best - best_value) / max(abs(first_best), 1e-12)) * 100.0
+
+    lines = [
+        "=" * 48,
+        f"  ITERASYON: {iteration} / {config.n_iterations}",
+        "=" * 48,
+        "",
+        f"  Problem: {problem.name}",
+        f"  Boyut: 2 (x1, x2)",
+        "",
+        "--- SONUCLAR ---",
+        f"  Best f(x)     : {best_value:.8f}",
+        f"  Iyilesme      : %{improvement:.3f}",
+        f"  Min'e uzaklik : {dist:.6f}",
+        f"  Toplam orneklem: {n_samples}",
+        "",
+        "--- GP MODEL ---",
+        f"  Kernel        : {config.kernel_type}",
+        f"  Ort. sigma    : {avg_sigma:.6f}",
+        "",
+        "--- EN IYI POZISYON ---",
+        f"  x = ({best_position[0]:.6f}, {best_position[1]:.6f})",
+        "",
+        "--- ACQUISITION ---",
+        f"  Fonksiyon     : {config.acquisition_type}",
+    ]
+    if "UCB" in config.acquisition_type:
+        lines.append(f"  Kappa         : {config.kappa:.3f}")
+    else:
+        lines.append(f"  Xi            : {config.xi:.4f}")
+
+    lines += [
+        "",
+        "--- BO FORMULU ---",
+        "  x_next = argmax alpha(x; GP)",
+        "  GP: mu(x), sigma(x) -> posterior",
+        "  alpha: Acquisition function",
+        "",
+        "Not:",
+        f"  {problem.description.split(chr(10))[0]}",
+    ]
+    return "\n".join(lines)
+
+
+def run_bayesian_optimization(config: BOConfig) -> dict:
+    """Bayesian Optimization ana dongusu."""
+    problem = build_pso_problem(config.problem_name)
+    rng = np.random.default_rng(config.random_seed)
+
+    # Kernel
+    kernel = _bo_build_kernel(config.kernel_type)
+    gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=5, alpha=1e-6, normalize_y=True)
+
+    # Initial random sampling
+    lb, ub = problem.lower_bounds, problem.upper_bounds
+    X_sampled = rng.uniform(lb, ub, size=(config.n_initial, 2))
+    y_sampled = np.array([problem.objective(x) for x in X_sampled])
+
+    # Fit initial GP
+    gp.fit(X_sampled, y_sampled)
+
+    best_idx = int(np.argmin(y_sampled))
+    best_value = float(y_sampled[best_idx])
+    best_position = X_sampled[best_idx].copy()
+    first_best = best_value
+
+    best_hist = [best_value]
+    sample_hist = list(y_sampled)
+    sigma_hist = []
+
+    # Layout
+    st.subheader(f"Bayesian Optimization — {problem.name}")
+    progress = st.progress(0.0)
+    left_col, right_col = st.columns([3.4, 1.6], gap="medium")
+    with left_col:
+        surface_ph = st.empty()
+        acq_ph = st.empty()
+        line_left, line_right = st.columns(2)
+        progress_ph = line_left.empty()
+        sigma_ph = line_right.empty()
+    with right_col:
+        st.caption("Canli bilgi paneli")
+        info_ph = st.empty()
+
+    # Candidate grid for acquisition optimization
+    n_cand = 5000
+    X_candidates_base = rng.uniform(lb, ub, size=(n_cand, 2))
+
+    for iteration in range(1, config.n_iterations + 1):
+        # Acquisition optimization
+        y_best = float(np.min(y_sampled))
+        X_candidates = np.vstack([
+            X_candidates_base,
+            rng.uniform(lb, ub, size=(1000, 2)),
+        ])
+        acq_values = _bo_acquisition(X_candidates, gp, y_best, config.acquisition_type, config.kappa, config.xi)
+        next_idx = int(np.argmin(acq_values))
+        next_point = X_candidates[next_idx]
+
+        # Evaluate
+        y_new = problem.objective(next_point)
+        X_sampled = np.vstack([X_sampled, next_point.reshape(1, -1)])
+        y_sampled = np.append(y_sampled, y_new)
+
+        # Update GP
+        gp.fit(X_sampled, y_sampled)
+
+        # Update best
+        if y_new < best_value:
+            best_value = y_new
+            best_position = next_point.copy()
+
+        best_hist.append(best_value)
+        sample_hist.append(y_new)
+
+        # Avg sigma
+        sigma_sample = gp.predict(X_candidates_base[:500], return_std=True)[1]
+        avg_sigma = float(np.mean(sigma_sample))
+        sigma_hist.append(avg_sigma)
+
+        # Visualization update
+        vis_due = (iteration % config.route_update_every == 0) or iteration == config.n_iterations
+        analytics_due = (iteration % config.analytics_update_every == 0) or iteration == config.n_iterations
+
+        if vis_due:
+            next_pt_show = next_point if iteration < config.n_iterations else None
+            surface_ph.plotly_chart(
+                build_bo_surrogate_figure(problem, X_sampled, y_sampled, gp, next_pt_show, iteration),
+                use_container_width=True,
+                key=f"bo_surface_{iteration}",
+            )
+            acq_ph.plotly_chart(
+                build_bo_acquisition_contour(
+                    problem, X_sampled, y_sampled, gp, next_pt_show,
+                    config.acquisition_type, config.kappa, config.xi, iteration,
+                ),
+                use_container_width=True,
+                key=f"bo_acq_{iteration}",
+            )
+            info_text = build_bo_live_info_text(
+                iteration=iteration, config=config, problem=problem,
+                best_value=best_value, best_position=best_position,
+                n_samples=len(X_sampled), avg_sigma=avg_sigma,
+                first_best=first_best,
+            )
+            info_ph.text_area("Canli bilgi paneli", value=info_text, height=780,
+                              disabled=True, label_visibility="collapsed")
+            progress.progress(iteration / config.n_iterations)
+            if config.frame_delay > 0:
+                time.sleep(config.frame_delay)
+
+        if analytics_due:
+            progress_ph.plotly_chart(
+                build_bo_progress_figure(best_hist, sample_hist),
+                use_container_width=True,
+                key=f"bo_progress_{iteration}",
+            )
+            sigma_ph.plotly_chart(
+                build_bo_uncertainty_figure(sigma_hist),
+                use_container_width=True,
+                key=f"bo_sigma_{iteration}",
+            )
+
+    return {
+        "algorithm": BO_ALGORITHM_NAME,
+        "problem_name": problem.name,
+        "best_value": best_value,
+        "best_position": best_position,
+        "history_best": best_hist,
+        "history_samples": sample_hist,
+        "history_sigma": sigma_hist,
+        "completed_iterations": config.n_iterations,
+        "total_samples": len(X_sampled),
+        "dimensions": 2,
+    }
+
+
+
+
 def main() -> None:
     st.set_page_config(page_title="Optimizasyon Simulasyonu", page_icon=":round_pushpin:", layout="wide")
     st.markdown(
@@ -2859,7 +3762,7 @@ def main() -> None:
     )
     st.title("Optimizasyon Cozumu: TSP ve PSO Problem Ailesi")
     st.caption(
-        "Bu uygulama, TSP tabanli algoritmalar (GA/SA/ACO) ve secili surekli optimizasyon "
+        "Bu uygulama, TSP tabanli algoritmalar (GA/SA/Tabu/ACO) ve secili surekli optimizasyon "
         "problemleri icin PSO adimlarini canli olarak gorsellestirir."
     )
     st.markdown(
@@ -2894,8 +3797,8 @@ def main() -> None:
     state_algorithm = (
         state_result["algorithm"] if isinstance(state_result, dict) and "algorithm" in state_result else ""
     )
-    needs_city_data = algorithm != PSO_ALGORITHM_NAME
-    if state_algorithm and state_algorithm != PSO_ALGORITHM_NAME:
+    needs_city_data = algorithm not in (PSO_ALGORITHM_NAME, BO_ALGORITHM_NAME)
+    if state_algorithm and state_algorithm not in (PSO_ALGORITHM_NAME, BO_ALGORITHM_NAME):
         needs_city_data = True
 
     cities: pd.DataFrame | None = None
@@ -2919,6 +3822,14 @@ def main() -> None:
             st.write(f"Problem: **{problem_preview.name}**")
             st.write(f"Boyut: **2** (x1, x2)")
             st.write(problem_preview.description)
+    elif isinstance(config, BOConfig):
+        problem_preview = build_pso_problem(config.problem_name)
+        with st.expander("BO problem ozeti", expanded=False):
+            st.write(f"Problem: **{problem_preview.name}**")
+            st.write(f"Boyut: **2** (x1, x2)")
+            st.write(f"Kernel: **{config.kernel_type}**")
+            st.write(f"Acquisition: **{config.acquisition_type}**")
+            st.write(problem_preview.description)
 
     if clear_button:
         for key in list(st.session_state.keys()):
@@ -2937,19 +3848,26 @@ def main() -> None:
                 st.error("TSP verisi yuklenemedi.")
                 st.stop()
             result = run_simulated_annealing(cities, config)
+        elif algorithm == "Tabu Search Algoritmasi":
+            if cities is None:
+                st.error("TSP verisi yuklenemedi.")
+                st.stop()
+            result = run_tabu_search(cities, config)
         elif algorithm == "Karinca Kolonisi Algoritmasi":
             if cities is None:
                 st.error("TSP verisi yuklenemedi.")
                 st.stop()
             result = run_ant_colony(cities, config)
-        else:
+        elif algorithm == PSO_ALGORITHM_NAME:
             result = run_particle_swarm(config)
+        else:
+            result = run_bayesian_optimization(config)
         st.session_state["solver_result"] = result
 
     if "solver_result" in st.session_state:
         result = st.session_state["solver_result"]
         st.subheader(f"Final Sonuc - {result['algorithm']}")
-        if result["algorithm"] == PSO_ALGORITHM_NAME:
+        if result["algorithm"] == PSO_ALGORITHM_NAME or result["algorithm"] == BO_ALGORITHM_NAME:
             best_position = np.asarray(result["best_position"], dtype=np.float64)
             col_l, col_r = st.columns([1.2, 2.8], gap="medium")
             with col_l:
@@ -2957,7 +3875,10 @@ def main() -> None:
                 st.write(f"Boyut: **{result['dimensions']}**")
                 st.write(f"Tamamlanan iterasyon: **{result['completed_iterations']}**")
                 st.write(f"En iyi maliyet: **{result['best_value']:.10f}**")
-                st.write(f"Son iterasyonda iyilesen parcacik: **{result['improved_particles_last_iter']}**")
+                if result["algorithm"] == BO_ALGORITHM_NAME:
+                    st.write(f"Toplam orneklem sayisi: **{result.get('total_samples', '?')}**")
+                else:
+                    st.write(f"Son iterasyonda iyilesen parcacik: **{result.get('improved_particles_last_iter', 0)}**")
             with col_r:
                 st.caption("En iyi pozisyon vektoru")
                 position_text = ", ".join([f"{v:.8f}" for v in best_position.tolist()])
@@ -2999,6 +3920,17 @@ def main() -> None:
                     )
                     st.write(f"2-Opt yerel iyilestirme: **{result.get('local_search_hits', 0)}**")
                     st.write(f"Reheat sayisi: **{result.get('reheat_count', 0)}**")
+                elif result["algorithm"] == "Tabu Search Algoritmasi":
+                    aspiration_ratio = (
+                        result["aspiration_count"] / result["completed_iterations"]
+                    ) * 100
+                    st.write(f"Tamamlanan iterasyon: **{result['completed_iterations']}**")
+                    st.write(f"Aday havuzu: **{result['candidate_pool_size']}**")
+                    st.write(f"Tabu tenure: **{result['tabu_tenure']}**")
+                    st.write(
+                        f"Aspiration kullanimi: **{result['aspiration_count']}** (%{aspiration_ratio:.2f})"
+                    )
+                    st.write(f"Cesitlilik-kick sayisi: **{result['diversification_count']}**")
                 else:
                     st.write(f"Tamamlanan iterasyon: **{result['completed_iterations']}**")
                     st.write(f"Karinca sayisi: **{result['ant_count']}**")
@@ -3028,7 +3960,11 @@ def main() -> None:
                     else (
                         "sa_tsp_81il_izmir_rota.csv"
                         if result["algorithm"] == "Tavlama Algoritmasi"
-                        else "aco_tsp_81il_izmir_rota.csv"
+                        else (
+                            "tabu_tsp_81il_izmir_rota.csv"
+                            if result["algorithm"] == "Tabu Search Algoritmasi"
+                            else "aco_tsp_81il_izmir_rota.csv"
+                        )
                     )
                 ),
                 mime="text/csv",

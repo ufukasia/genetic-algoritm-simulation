@@ -1,6 +1,6 @@
-# Genetic Algorithm Simulation (Streamlit)
+# Optimization Algorithms Simulation (Streamlit)
 
-Bu proje, Turkiye'deki 81 il icin gezgin satici problemini (TSP) genetik algoritma ile cozen ve sureci canli gosteren bir Streamlit uygulamasidir.
+Bu proje, Turkiye'deki 81 il icin gezgin satici problemini (TSP) birden fazla yontemle (Genetik Algoritma, Tavlama, Tabu Search, Karinca Kolonisi) cozen ve sureci canli gosteren bir Streamlit uygulamasidir.
 
 ## Proje yapisi
 
