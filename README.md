@@ -4,10 +4,28 @@ Bu proje, Turkiye'deki 81 il icin gezgin satici problemini (TSP) birden fazla yo
 
 ## Proje yapisi
 
-- `streamlit_app.py`: Ana Streamlit uygulamasi
+- `streamlit_app.py`: Ince giris noktasi (sadece `optimization_sim.app.main` cagirir)
+- `optimization_sim/models.py`: Konfig dataclass'lari ve sabitler
+- `optimization_sim/problems.py`: PSO/BO benchmark problem tanimlari
+- `optimization_sim/data.py`: Sehir verisi yukleme ve mesafe matrisi
+- `optimization_sim/operators.py`: TSP operatorleri (crossover, mutasyon, 2-opt vb.)
+- `optimization_sim/visualizations.py`: Tum grafik ve canli panel uretecileri
+- `optimization_sim/algorithms.py`: GA/SA/Tabu/ACO/PSO/BO calistiricilari
+- `optimization_sim/sidebar.py`: Sidebar konfigurasyonu
+- `optimization_sim/registry.py`: Algoritma kayit/yonlendirme katmani
+- `optimization_sim/results.py`: Final sonuc render katmani
+- `optimization_sim/app.py`: Ana uygulama orkestrasyonu
 - `81il.csv`: Sehir koordinat veri seti
 - `requirements.txt`: Streamlit Cloud ve lokal kurulum bagimliliklari
 - `runtime.txt`: Streamlit Cloud Python surumu (`python-3.11`)
+
+## Yeni algoritma ekleme (moduler akis)
+
+1. `optimization_sim/models.py` icine yeni algoritmanin config dataclass'ini ekle.
+2. `optimization_sim/sidebar.py` icinde algoritma secimi ve parametre UI bolumunu ekle.
+3. `optimization_sim/algorithms.py` icinde `run_*` fonksiyonunu yaz.
+4. `optimization_sim/registry.py` icinde `ALGORITHM_SPECS` tablosuna yeni kayit ekle.
+5. Gerekirse `optimization_sim/results.py` icinde final sonuc gosterimini genislet.
 
 ## Lokal calistirma
 
