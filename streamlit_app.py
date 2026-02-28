@@ -2855,7 +2855,7 @@ def run_particle_swarm(config: PSOConfig) -> dict:
 def main() -> None:
     st.set_page_config(page_title="Optimizasyon Simulasyonu", page_icon=":round_pushpin:", layout="wide")
     st.markdown(
-        "### Ostim Teknik Ãœniversitesi YazÄ±lÄ±m MÃ¼hendisliÄŸi  AkÄ±llÄ± Optimizasyon AlgoritmalarÄ±"
+        "### Ostim Teknik Üniversitesi Yazılım Mühendisliği Akıllı Optimizasyon Algoritmaları"
     )
     st.title("Optimizasyon Cozumu: TSP ve PSO Problem Ailesi")
     st.caption(
